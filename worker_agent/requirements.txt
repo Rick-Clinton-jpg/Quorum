@@ -1,0 +1,7 @@
+google-adk>=2.7.1
+google-genai>=2.18.1
+pydantic>=2.0
+python-dotenv>=1.0
+
+# For self_check.py to run Sentry's own suite against a drafted patch.
+pytest>=7.0
