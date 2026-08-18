@@ -1,0 +1,11 @@
+{
+  "name": "review-board",
+  "description": "Structured six-stage deliberation before committing to an approach: restate the objective, map solution paths, run a mandatory second-pass prior art check, score against disclosed criteria, run a six-angle multi-perspective review, then stop for explicit approval. Invoke with /review-board.",
+  "version": "3.0.0",
+  "author": {
+    "name": "Rick Clinton",
+    "url": "https://github.com/Rick-Clinton-jpg"
+  },
+  "homepage": "https://github.com/Rick-Clinton-jpg/Review-Board",
+  "repository": "https://github.com/Rick-Clinton-jpg/Review-Board"
+}

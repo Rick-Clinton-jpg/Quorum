@@ -1,0 +1,38 @@
+[
+  {
+    "name": "agent_directed_address",
+    "pattern": "(?i)(agent note|dear ai|hey claude|attention ai|to the assistant)",
+    "severity": "HIGH",
+    "description": "Direct addressing of AI agent in content"
+  },
+  {
+    "name": "hidden_channel_instruction",
+    "pattern": "(?i)(<!--.*?(ignore|override|bypass|skip).*?-->|#.*?(ignore|override|bypass|skip).*|/\\*.*?(ignore|override|bypass|skip).*?\\*/)",
+    "severity": "HIGH",
+    "description": "Imperative instructions buried in HTML/code comments"
+  },
+  {
+    "name": "scope_expansion_phrase",
+    "pattern": "(?i)(also create|in addition to the above|besides that|furthermore|additionally)",
+    "severity": "MEDIUM",
+    "description": "Scope expansion phrasing suggesting hidden tasks"
+  },
+  {
+    "name": "confirmation_bypass_claim",
+    "pattern": "(?i)(doesn'?t require confirmation|no confirmation needed|routine step|standard procedure|just run it|go ahead and)",
+    "severity": "HIGH",
+    "description": "Claims that bypass normal confirmation requirements"
+  },
+  {
+    "name": "env_exfil_pattern",
+    "pattern": "(?i)(os\\.environ|environ.*json|json.*environ|dict\\(os\\.environ\\))",
+    "severity": "HIGH",
+    "description": "Environment variable access or serialization — potential exfil vector"
+  },
+  {
+    "name": "network_exfil_pattern",
+    "pattern": "(?i)(urllib\\.request\\.urlopen.*json|requests\\.(post|put).*(env|environ)|httpbin\\.org|json\\.dumps.*env.*urlopen)",
+    "severity": "HIGH",
+    "description": "Network request containing serialized environment data"
+  }
+]
