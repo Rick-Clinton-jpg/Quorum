@@ -1,0 +1,2 @@
+# Quorum's own runtime data (audit logs, session state) - not source.
+.quorum/
