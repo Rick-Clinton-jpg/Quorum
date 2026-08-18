@@ -1,0 +1,30 @@
+{
+  "name": "sentry",
+  "owner": {
+    "name": "Rick-Clinton-jpg",
+    "url": "https://github.com/Rick-Clinton-jpg"
+  },
+  "description": "Official marketplace for the Sentry project's Claude Code plugin — a deterministic prompt-injection and agent-manipulation pattern detector.",
+  "plugins": [
+    {
+      "name": "sentry-scan",
+      "source": "./",
+      "description": "Scans text, files, or repos for prompt-injection and agent-manipulation patterns (agent-directed address, hidden-channel instructions, scope-expansion phrasing, confirmation-bypass claims, env/network exfil) by running Sentry's real deterministic regex engine.",
+      "version": "1.0.0",
+      "author": {
+        "name": "Rick-Clinton-jpg",
+        "url": "https://github.com/Rick-Clinton-jpg"
+      },
+      "homepage": "https://github.com/Rick-Clinton-jpg/Sentry",
+      "license": "PolyForm-Noncommercial-1.0.0",
+      "keywords": [
+        "prompt-injection",
+        "security",
+        "detection",
+        "agent-manipulation",
+        "static-analysis",
+        "regex"
+      ]
+    }
+  ]
+}

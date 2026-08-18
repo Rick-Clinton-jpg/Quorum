@@ -1,0 +1,6 @@
+# Only needed for run_real_eval.py — kernel.py, kernel_demo.py, eval_harness.py,
+# and score_ground_truth.py use the standard library only.
+
+requests>=2.31
+openai>=1.0          # Groq and GitHub Models use the OpenAI-compatible client
+google-generativeai>=0.5   # optional — only needed for the Gemini path

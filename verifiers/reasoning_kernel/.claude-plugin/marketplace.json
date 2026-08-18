@@ -1,0 +1,30 @@
+{
+  "name": "reasoning-kernel",
+  "owner": {
+    "name": "Rick-Clinton-jpg",
+    "url": "https://github.com/Rick-Clinton-jpg"
+  },
+  "description": "Official marketplace for the reasoning-kernel project's Claude Code plugin — a deterministic integrity check for AI-generated reasoning.",
+  "plugins": [
+    {
+      "name": "reasoning-kernel-check",
+      "source": "./",
+      "description": "Mechanically checks AI-generated reasoning against the reasoning-kernel's 8 enforcement rules by building a typed reasoning graph and running a real Kernel.commit().",
+      "version": "1.0.0",
+      "author": {
+        "name": "Rick-Clinton-jpg",
+        "url": "https://github.com/Rick-Clinton-jpg"
+      },
+      "homepage": "https://github.com/Rick-Clinton-jpg/reasoning-kernel",
+      "license": "PolyForm-Noncommercial-1.0.0",
+      "keywords": [
+        "reasoning",
+        "fact-checking",
+        "provenance",
+        "confidence",
+        "verification",
+        "integrity"
+      ]
+    }
+  ]
+}

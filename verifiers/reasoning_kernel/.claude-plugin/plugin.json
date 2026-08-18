@@ -1,0 +1,21 @@
+{
+  "name": "reasoning-kernel-check",
+  "displayName": "Reasoning Kernel Check",
+  "version": "1.0.0",
+  "description": "Mechanically checks AI-generated reasoning against the reasoning-kernel's 8 enforcement rules by building a typed reasoning graph and running a real Kernel.commit() — catches unsupported claims and overconfident conclusions instead of asking a model to grade its own homework.",
+  "author": {
+    "name": "Rick-Clinton-jpg",
+    "url": "https://github.com/Rick-Clinton-jpg"
+  },
+  "homepage": "https://github.com/Rick-Clinton-jpg/reasoning-kernel",
+  "repository": "https://github.com/Rick-Clinton-jpg/reasoning-kernel",
+  "license": "PolyForm-Noncommercial-1.0.0",
+  "keywords": [
+    "reasoning",
+    "fact-checking",
+    "provenance",
+    "confidence",
+    "verification",
+    "integrity"
+  ]
+}

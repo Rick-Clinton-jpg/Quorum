@@ -1,0 +1,19 @@
+# trust-boundary requirements
+#
+# Sentry is wired in with a confirmed API (see pipeline.py's `from sentry
+# import scan`, verified against sentry/__init__.py + sentry/engine.py) and
+# is a normal pip-installable package.
+git+https://github.com/Rick-Clinton-jpg/Sentry
+
+# Reasoning Kernel is wired in at the code level too (pipeline.py's
+# `from kernel import Kernel, ...`, verified against kernel.py) — but the
+# reasoning-kernel repo has no pyproject.toml/setup.py yet, so `pip install
+# git+...` against it won't actually build or install anything importable.
+# Left commented out on purpose rather than working around that gap here;
+# packaging reasoning-kernel properly is a separate follow-up in that repo.
+# Once it's pip-installable, uncomment:
+# git+https://github.com/Rick-Clinton-jpg/reasoning-kernel
+
+# Review-Board is invoked manually (`/review-board` in Claude Code) and
+# is never called programmatically by pipeline.py — see ARCHITECTURE.md
+# ("Coordinate, Don't Fuse"). It is not a runtime dependency here.
