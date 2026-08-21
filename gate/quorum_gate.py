@@ -386,17 +386,26 @@ def run_gate(
 def retry_gate(
     task_description: str,
     max_gate_attempts: int = 2,
+    intent_graph: Optional[IntentGraph] = None,
+    audit: Optional[AuditLogger] = None,
 ) -> tuple[dict, GateResult, list[dict]]:
     """Runs the Worker Agent, then the gate; on REJECT, feeds the gate's
     reasons back to the Worker Agent for one redraft - a SEPARATE, outer
     loop from worker_agent's own internal self-check revision loop
     (worker_agent.orchestrator.MAX_ATTEMPTS). Stops immediately on PASS or
     ESCALATE - ESCALATE needs a human, not another automated attempt.
+
+    `intent_graph`/`audit` are optional so a caller that's tracking a real
+    session across multiple calls (e.g. a service layer holding one
+    IntentGraph per user/session) can pass its own and get real re-entry
+    detection across those calls. Omit either to get a fresh one per call
+    (this function's original, self-contained behavior - what the test
+    suite exercises).
     """
     from worker_agent.orchestrator import run_worker_agent  # deferred: keeps `import gate.quorum_gate` cheap
 
-    intent_graph = IntentGraph()
-    audit = AuditLogger(root=str(DEFAULT_AUDIT_ROOT))
+    intent_graph = intent_graph if intent_graph is not None else IntentGraph()
+    audit = audit if audit is not None else AuditLogger(root=str(DEFAULT_AUDIT_ROOT))
     description = task_description
     history: list[dict] = []
     proposal: dict = {}
