@@ -238,8 +238,24 @@ GOOGLE_GENAI_USE_VERTEXAI=FALSE
 
 **Current key is a free-tier key with no billing attached** (rate limit:
 5 requests/minute on `gemini-3.5-flash`). This is fine for iteration but
-will bottleneck a real demo — either request a billing-enabled key, or
-switch to real Vertex AI for the deployed Cloud Run service:
+will bottleneck a real demo.
+
+**The hackathon itself provides $150 in Google Cloud credits** —
+confirmed via the hackathon's own Devpost page (search-engine cache only;
+`devpost.com` and `discuss.google.dev` are both blocked by this sandbox's
+network egress proxy, so verify directly rather than trusting this
+secondhand). Redemption: sign up for a no-cost Google Cloud trial, then go
+to the **Resources tab** at `allthingsagentichackathon.devpost.com` and
+fill out the credit form there to apply the $150 to that project's
+billing account. Do this before Phase 4 — the same billing-enabled
+project this unlocks is also exactly what Cloud Run + Vertex AI need, so
+there's no reason to keep using the free-tier key once this is set up.
+Two options once the credits land:
+- Generate a new Gemini API key under the billing-enabled project (same
+  `.env` shape as above, just a different key/no more rate limit), or
+- Switch straight to real Vertex AI for the deployed Cloud Run service
+  (the better target — one project, one credit pool, and it's what the
+  hackathon's mandatory GCP-infra requirement expects anyway):
 
 ```
 GOOGLE_GENAI_USE_VERTEXAI=TRUE
