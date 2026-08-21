@@ -282,30 +282,58 @@ actually live there, and it changes IntentGraph's real detection behavior.
 
 ### 6.1 Cloud Run + Firestore (the only missing mandatory requirement)
 
-Nothing built so far talks to GCP at all. Needed:
+**Status: audit logging done and tested; IntentGraph persistence and the
+Cloud Run service layer still open.**
 
-- **Cloud Run**: host `gate/quorum_gate.py`'s coordinator (wrap
-  `retry_gate()` or `run_gate()` behind an HTTP endpoint — nothing like
-  this exists yet, there's no web server/API layer anywhere in the repo).
-- **Firestore**: replace two things currently held only in local
-  process memory / local disk:
-  - `IntentGraph` session state (`gate/quorum_gate.py::retry_gate`
-    currently creates one `IntentGraph()` per process, in-memory only —
-    it does not persist across invocations, and `IntentGraph` itself
-    (`verifiers/intent_graph/intent_layer/graph.py`) has no
-    serialization methods at all. **You will need to write that
-    serialization** — nodes carry a `numpy.ndarray` embedding, which
-    needs a real encoding strategy for Firestore (e.g. store as a list of
-    floats).
-  - Warden's audit log (`verifiers/warden/warden/audit.py::AuditLogger`)
-    currently writes NDJSON to local disk at `.quorum/audit/` (path set
-    in `gate/quorum_gate.py::DEFAULT_AUDIT_ROOT`). `AuditLogger` is a
-    small, simple class (`log()`/`read()`) — either re-point its `root`
-    at a Firestore-backed shim with the same interface, or write a
-    parallel Firestore writer and call both/replace it. Given the
-    project's own "coordinate, don't fuse" principle, prefer wrapping/
-    replacing at the `AuditLogger` call sites in `quorum_gate.py` rather
-    than modifying `verifiers/warden` itself.
+- **`gate/firestore_audit.py::FirestoreAuditLogger`** — done, 4 tests
+  passing (`gate/tests/test_firestore_audit.py`). Matches
+  `warden.audit.AuditLogger`'s real `log()`/`read()` keyword-arg signature
+  exactly (`agent_id`/`objective`/`status`/`tag`/`note`/`action`/`extra`),
+  not a guessed one — a first draft of this file used
+  `log(event_type, payload)`, which doesn't match what
+  `gate/quorum_gate.py::run_gate()` actually calls at any of its three
+  audit-log call sites and would raise `TypeError` on the very first gate
+  run. Falls back to the real, unmodified `warden.audit.AuditLogger`
+  (local NDJSON) if `google-cloud-firestore` isn't installed, client init
+  fails, or a live write/read fails — not just at construction time.
+  Dependency: `gate/requirements-quorum.txt` (kept separate from
+  `gate/requirements.txt`, which is the vendored, governed file — see §4).
+  To wire in: pass a `FirestoreAuditLogger(...)` instance as `run_gate()`'s
+  `audit=` param, or as `retry_gate()`'s new `audit=` param (see below).
+
+- **`gate/quorum_gate.py::retry_gate()`** now accepts optional
+  `intent_graph`/`audit` params (previously it always constructed its own
+  per call, silently defeating cross-request re-entry detection — fixed
+  because a Cloud Run service handling one user's session across multiple
+  HTTP calls needs to pass the *same* `IntentGraph` through each call, not
+  get a fresh one every time). Omit either to keep the original
+  self-contained behavior the test suite exercises.
+
+- **Cloud Run**: host the coordinator behind an HTTP endpoint — nothing
+  like this exists in this repo yet (a `service/` FastAPI layer was
+  drafted elsewhere but hasn't landed on this branch as of this writing;
+  check for it before rebuilding). If you write it: **add a
+  `.dockerignore`** excluding at minimum `**/.venv/`, `**/.env`, `.git/`,
+  `**/__pycache__/`, `.pytest_cache/`, `.quorum/` — a bare `COPY . .`
+  without one will bake `worker_agent/.env`'s real API key straight into
+  the image. Inject credentials at deploy time via `--set-env-vars` or
+  Secret Manager instead. Also budget real time for two things easy to
+  miss until the first live test: the Cloud Run service account needs
+  `roles/aiplatform.user` (or equivalent) to call Vertex AI — not granted
+  by default — and Cloud Run's request timeout (default much lower than
+  needed) should be raised well above what one `retry_gate()` call can
+  take, since it's up to two full Worker Agent calls plus two gate passes
+  in sequence, and this session has personally observed single Gemini
+  calls taking 30–60s+ under free-tier rate limiting.
+
+- **Firestore — `IntentGraph` session state — still open.**
+  `IntentGraph` (`verifiers/intent_graph/intent_layer/graph.py`) has no
+  serialization methods at all. **This still needs to be written** — nodes
+  carry a `numpy.ndarray` embedding, which needs a real encoding strategy
+  for Firestore (e.g. store as a list of floats). This is the harder of
+  the two Firestore pieces and the last one recommended to build, once the
+  Cloud Run skeleton is proven end-to-end — see the sequencing note this
+  session gave when asked.
 
 ### 6.2 One clean live end-to-end rep
 
