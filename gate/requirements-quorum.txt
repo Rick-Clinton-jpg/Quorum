@@ -1,6 +1,7 @@
 # Dependencies for Quorum-owned gate/ code (quorum_gate.py, quorum_paths.py,
-# firestore_audit.py) - kept separate from gate/requirements.txt, which is
-# the vendored Trust Boundary repo's own file (see gate/CONTRIBUTING.md's
-# governance boundary on that file).
+# firestore_audit.py, firestore_intent.py) - kept separate from
+# gate/requirements.txt, which is the vendored Trust Boundary repo's own
+# file (see gate/CONTRIBUTING.md's governance boundary on that file).
 
 google-cloud-firestore>=2.14.0
+numpy

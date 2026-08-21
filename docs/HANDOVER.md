@@ -282,7 +282,7 @@ actually live there, and it changes IntentGraph's real detection behavior.
 
 ### 6.1 Cloud Run + Firestore (the only missing mandatory requirement)
 
-**Status: audit logging done and tested; IntentGraph persistence and the
+**Status: audit logging and IntentGraph persistence done and tested; the
 Cloud Run service layer still open.**
 
 - **`gate/firestore_audit.py::FirestoreAuditLogger`** — done, 4 tests
@@ -326,14 +326,38 @@ Cloud Run service layer still open.**
   in sequence, and this session has personally observed single Gemini
   calls taking 30–60s+ under free-tier rate limiting.
 
-- **Firestore — `IntentGraph` session state — still open.**
-  `IntentGraph` (`verifiers/intent_graph/intent_layer/graph.py`) has no
-  serialization methods at all. **This still needs to be written** — nodes
-  carry a `numpy.ndarray` embedding, which needs a real encoding strategy
-  for Firestore (e.g. store as a list of floats). This is the harder of
-  the two Firestore pieces and the last one recommended to build, once the
-  Cloud Run skeleton is proven end-to-end — see the sequencing note this
-  session gave when asked.
+- **`gate/firestore_intent.py::FirestoreIntentStore`** — done, 7 tests
+  passing (`gate/tests/test_firestore_intent.py`), all built from
+  `IntentGraph`'s real `add_turn()` API rather than hand-constructed
+  nodes. Matches `IntentGraph`'s real shape exactly (confirmed by reading
+  `verifiers/intent_graph/intent_layer/graph.py` directly, not assumed):
+  `graph.nodes`/`graph.edges` are plain **lists** (`List[IntentNode]`/
+  `List[Edge]`), not dicts — a first draft assumed dict-shaped state with
+  a `Node` class that doesn't exist (`intent_layer.graph` only exports
+  `IntentNode`) and an `Edge.similarity` field that doesn't exist either;
+  that draft would have raised `ImportError` before any code ran.
+  **The more important bug that draft had: it omitted `safety_boundary`
+  and `lineage_root` from the serialized shape.** Those two fields are the
+  entire mechanism re-entry detection runs on —
+  `IntentGraph.lineage_boundary_nodes()` filters on exactly
+  `n.lineage_root == node.lineage_root and n.safety_boundary`, and
+  `scorer.py`'s hard gate refuses to elevate risk above `LOW` without a
+  real `safety_boundary=True` node in lineage. Drop either field and a
+  reloaded graph comes back with every node's `safety_boundary` reset —
+  no exception anywhere, re-entry detection just silently stops working
+  after the first save/reload, forever. `test_roundtrip_preserves_safety_boundary_and_lineage_root`
+  in the test file is the regression test for exactly this — it builds a
+  graph via a real `[SAFETY BOUNDARY TRIGGERED]` marker turn (the same
+  marker `gate/quorum_gate.py::run_gate()` injects after a `REJECT`), then
+  asserts `lineage_boundary_nodes()` still finds it after a serialize/
+  deserialize round trip, not just that the raw field survived. Also
+  restores `graph._next_id` (the private counter `add_turn()`'s
+  `_new_id()` uses) so a reloaded graph doesn't mint a node id that
+  collides with one already in the graph.
+  To wire in: `store.load_session(session_id)` /
+  `store.save_session(session_id, graph)` around each `run_gate()`/
+  `retry_gate()` call, keyed on whatever session identity the service
+  layer uses.
 
 ### 6.2 One clean live end-to-end rep
 
