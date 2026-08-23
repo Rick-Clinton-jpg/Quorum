@@ -1,0 +1,12 @@
+# Never let these into a build context - worker_agent/.env holds a real
+# (if free-tier) API key, and .venv/.git bloat the image for no reason.
+# Real credentials belong in --set-env-vars / Secret Manager at deploy
+# time, never baked into an image layer.
+
+**/.venv/
+**/.env
+.git/
+**/__pycache__/
+**/.pytest_cache/
+.quorum/
+*.pyc

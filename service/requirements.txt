@@ -1,0 +1,27 @@
+# Runtime dependencies for service/main.py, deployed as the Cloud Run
+# image. Combines what worker_agent/, gate/'s Quorum-owned code, and
+# intent_graph actually need at runtime - not a copy of any single
+# component's own requirements.txt.
+#
+# Deliberately excludes sentence-transformers (listed in
+# verifiers/intent_graph/requirements.txt): it pulls in torch, which is
+# a heavy, slow addition to a Cloud Run image, and intent_layer's own
+# extractor.py already falls back automatically (and loudly - a logged
+# warning) to an offline scikit-learn HashingVectorizer if the real
+# model can't load - see docs/INTEGRATION_MAP.md Section 5's disclosure
+# of this exact tradeoff. Add sentence-transformers back here if real
+# semantic embeddings turn out to matter enough to justify the image-size
+# and cold-start cost once this is actually deployed.
+
+fastapi>=0.110.0
+uvicorn[standard]>=0.28.0
+
+google-adk>=2.7.1
+google-genai>=2.18.1
+pydantic>=2.0
+python-dotenv>=1.0
+
+google-cloud-firestore>=2.14.0
+
+numpy
+scikit-learn
