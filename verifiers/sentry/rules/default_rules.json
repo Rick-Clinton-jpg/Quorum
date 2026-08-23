@@ -34,5 +34,11 @@
     "pattern": "(?i)(urllib\\.request\\.urlopen.*json|requests\\.(post|put).*(env|environ)|httpbin\\.org|json\\.dumps.*env.*urlopen)",
     "severity": "HIGH",
     "description": "Network request containing serialized environment data"
+  },
+  {
+    "name": "system_override_instruction",
+    "pattern": "(?i)(override system (prompt|instruction|rule)|bypass system (restriction|guideline|filter)|you are now in developer mode|ignore previous system instructions)",
+    "severity": "HIGH",
+    "description": "Instructions attempting to override or bypass system rules and constraints"
   }
 ]
