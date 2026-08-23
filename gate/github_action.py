@@ -127,7 +127,19 @@ def open_pr_for_proposal(
 
 
 def _run(cmd: list[str]) -> str:
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    # subprocess.run raises OSError (FileNotFoundError when the binary
+    # itself is missing, PermissionError, etc.) directly from the exec
+    # call - that's a different failure mode than a non-zero exit code,
+    # and was previously left uncaught here. Confirmed live: on a
+    # container without git installed, that let a raw FileNotFoundError
+    # escape all the way out to service/main.py's generic exception
+    # handler, 500ing the *entire* /gate/retry request and discarding an
+    # already-computed PASS verdict, instead of degrading to
+    # action_error the way a real ActionError does.
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True)
+    except OSError as exc:
+        raise ActionError(f"could not run command: {' '.join(cmd)}\n{exc}") from exc
     if result.returncode != 0:
         raise ActionError(f"command failed: {' '.join(cmd)}\n{result.stderr}")
     return result.stdout

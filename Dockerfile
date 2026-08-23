@@ -10,6 +10,15 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /app
 
+# python:3.11-slim has no git - gate/github_action.py's clone/branch/
+# apply/commit/push (Phase 2's PR-opening action) shells out to the real
+# git binary, not a Python git library. Confirmed live: without this,
+# every PASS verdict's action step fails with "No such file or
+# directory: 'git'".
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends git \
+    && rm -rf /var/lib/apt/lists/*
+
 RUN pip install --no-cache-dir --upgrade pip
 
 COPY service/requirements.txt ./requirements.txt

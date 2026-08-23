@@ -13,7 +13,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from gate.github_action import ActionError, open_pr_for_proposal
+from gate.github_action import ActionError, _run, open_pr_for_proposal
 from gate.quorum_gate import GateResult, GateVerdict
 
 PROPOSAL = {
@@ -50,6 +50,19 @@ def test_raises_when_proposal_has_no_diff():
     proposal = {k: v for k, v in PROPOSAL.items() if k != "diff"}
     with pytest.raises(ActionError, match="no 'diff'"):
         open_pr_for_proposal(proposal, _pass_result(), repo="o/r", base_branch="main", token="t")
+
+
+def test_run_converts_missing_binary_to_action_error():
+    """Found live: python:3.11-slim has no git installed, so
+    subprocess.run(["git", ...]) raised a raw FileNotFoundError that
+    escaped _run() entirely (only non-zero exit codes were handled),
+    which then 500'd the whole /gate/retry request instead of degrading
+    to action_error - discarding an already-computed PASS verdict.
+    Exercises _run() itself directly (not mocked), against a binary that
+    genuinely doesn't exist, so a regression here can't hide behind a
+    mocked subprocess.run in the other tests."""
+    with pytest.raises(ActionError, match="could not run command"):
+        _run(["definitely-not-a-real-binary-xyz", "--version"])
 
 
 def test_git_failure_surfaces_as_action_error():
