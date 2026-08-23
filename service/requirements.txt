@@ -25,3 +25,7 @@ google-cloud-firestore>=2.14.0
 
 numpy
 scikit-learn
+
+# gate/github_action.py's PR-creation call (git CLI, already on the base
+# image, handles clone/branch/apply/commit/push).
+requests

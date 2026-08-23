@@ -5,3 +5,8 @@
 
 google-cloud-firestore>=2.14.0
 numpy
+
+# gate/github_action.py's one direct REST call (PR creation) - git itself
+# handles the clone/branch/apply/commit/push via subprocess, no library
+# needed for that part.
+requests

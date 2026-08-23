@@ -28,7 +28,8 @@ from pydantic import BaseModel
 import gate.quorum_paths  # noqa: F401 - import first, for its sys.path side effects
 from gate.firestore_audit import FirestoreAuditLogger
 from gate.firestore_intent import FirestoreIntentStore
-from gate.quorum_gate import run_gate
+from gate.github_action import ActionError, open_pr_for_proposal
+from gate.quorum_gate import GateResult, GateVerdict, run_gate
 
 app = FastAPI(title="Quorum Coordinator", version="0.1.0")
 
@@ -56,6 +57,41 @@ class GateResponse(BaseModel):
     reasons: list[str]
     proposal: Optional[dict[str, Any]] = None
     attempts: Optional[int] = None
+    pr_url: Optional[str] = None
+    action_error: Optional[str] = None
+
+
+def _maybe_open_pr(proposal: dict[str, Any], gate_result: GateResult) -> tuple[Optional[str], Optional[str]]:
+    """The Phase 2 terminal action: on PASS, and only if the deployment
+    has actually configured QUORUM_ACTION_GITHUB_TOKEN, open a real PR
+    via gate/github_action.py. Absence of the token means the action is
+    off (e.g. running locally) - that's not an error. A configured token
+    that then fails IS surfaced via action_error, not swallowed - a
+    failed action on a PASS verdict is something the caller needs to
+    know about."""
+    if gate_result.verdict != GateVerdict.PASS:
+        return None, None
+
+    token = os.environ.get("QUORUM_ACTION_GITHUB_TOKEN")
+    repo = os.environ.get("QUORUM_ACTION_GITHUB_REPO")
+    if not token or not repo:
+        return None, None
+
+    base_branch = os.environ.get("QUORUM_ACTION_BASE_BRANCH", "main")
+    target_subdir = os.environ.get("QUORUM_ACTION_TARGET_SUBDIR")
+
+    try:
+        result = open_pr_for_proposal(
+            proposal,
+            gate_result,
+            repo=repo,
+            base_branch=base_branch,
+            target_subdir=target_subdir,
+            token=token,
+        )
+        return result["pr_url"], None
+    except ActionError as exc:
+        return None, str(exc)
 
 
 @app.get("/status")
@@ -92,12 +128,16 @@ def execute_retry_gate(req: RetryGateRequest) -> GateResponse:
 
         _INTENT_STORE.save_session(req.session_id, intent_graph)
 
+        pr_url, action_error = _maybe_open_pr(proposal, gate_result)
+
         return GateResponse(
             session_id=req.session_id,
             verdict=gate_result.verdict.value,
             reasons=gate_result.reasons,
             proposal=proposal,
             attempts=len(history),
+            pr_url=pr_url,
+            action_error=action_error,
         )
     except Exception as exc:  # noqa: BLE001 - surface as a 500 with the real cause, not a bare 500
         raise HTTPException(status_code=500, detail=str(exc)) from exc
