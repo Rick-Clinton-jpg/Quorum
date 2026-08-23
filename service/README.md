@@ -23,21 +23,48 @@ curl -X POST localhost:8080/gate/run \
   -d @gate/tests/fixtures/markdown_exfil_proposal.json  # wrap under {"proposal": ..., "session_id": "test"}
 ```
 
-## Deploy (once credentials are connected)
+## Deploy
+
+GCP project: `REDACTED-GCP-PROJECT-ID` (hackathon trial credit,
+90 days). Run these from a shell that has `gcloud` installed and
+authenticated to this project (`gcloud auth login`, then
+`gcloud config set project REDACTED-GCP-PROJECT-ID`).
+
+**1. One-time setup — grant Cloud Run's default service account access to
+Vertex AI (skip this and every deploy will fail on the first real
+request, not at deploy time):**
+
+```bash
+PROJECT_ID=REDACTED-GCP-PROJECT-ID
+PROJECT_NUMBER=$(gcloud projects describe $PROJECT_ID --format='value(projectNumber)')
+
+gcloud services enable run.googleapis.com aiplatform.googleapis.com --project=$PROJECT_ID
+
+gcloud projects add-iam-policy-binding $PROJECT_ID \
+  --member="serviceAccount:${PROJECT_NUMBER}-compute@developer.gserviceaccount.com" \
+  --role="roles/aiplatform.user"
+```
+
+**2. Deploy:**
 
 ```bash
 gcloud run deploy quorum-coordinator \
   --source . \
+  --project REDACTED-GCP-PROJECT-ID \
   --region us-central1 \
   --timeout 900 \
-  --set-env-vars GOOGLE_GENAI_USE_VERTEXAI=TRUE,GOOGLE_CLOUD_PROJECT=<PROJECT_ID>,GOOGLE_CLOUD_LOCATION=us-central1
+  --set-env-vars GOOGLE_GENAI_USE_VERTEXAI=TRUE,GOOGLE_CLOUD_PROJECT=REDACTED-GCP-PROJECT-ID,GOOGLE_CLOUD_LOCATION=us-central1
 ```
 
-Two things to do once, before the first deploy — neither happens
-automatically:
+You'll be prompted for `--allow-unauthenticated` interactively if you
+don't pass it — decide deliberately: an unauthenticated public endpoint
+means anyone who finds the URL can spend Vertex AI credit on every hit.
+For a hackathon demo, `--allow-unauthenticated` is probably the right
+call (judges need to reach it) — but it's a decision, not a default.
 
-- Grant the Cloud Run service account `roles/aiplatform.user` (or
-  equivalent) so it can call Vertex AI.
-- Decide on auth (`--allow-unauthenticated` exposes the endpoint, and any
-  hit against it spends real Vertex AI quota — make that call
-  deliberately, not by default).
+**3. Confirm it's live:**
+
+```bash
+SERVICE_URL=$(gcloud run services describe quorum-coordinator --region us-central1 --format='value(status.url)')
+curl "$SERVICE_URL/healthz"
+```
