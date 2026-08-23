@@ -131,6 +131,45 @@ class TestRunGate:
         assert result.verdict == GateVerdict.PASS
         assert result.reasons == []
 
+    def test_self_check_failure_rejects_even_when_sentry_and_kernel_pass(self, markdown_exfil_proposal):
+        """Found live against the deployed Cloud Run service: pytest
+        wasn't installed in that container, so self_check_result.passed
+        was False on every real proposal, yet the gate still returned
+        PASS - Sentry/Kernel/IntentGraph only ever evaluated the diff's
+        *content*, never whether the proposal's own tests actually ran.
+        Same fixture as test_markdown_exfil_proposal_end_to_end (Sentry
+        clean, Kernel SUPPORTED) with only self_check_result.passed
+        flipped to False - verdict must flip from PASS to REJECT."""
+        proposal = dict(markdown_exfil_proposal)
+        proposal["self_check_result"] = dict(proposal["self_check_result"])
+        proposal["self_check_result"]["passed"] = False
+        proposal["self_check_result"]["pytest_summary"] = "No module named pytest"
+
+        result = run_gate(proposal, intent_graph=IntentGraph())
+        assert result.sentry_action == "PROCEED_WITH_LOG"
+        assert result.kernel_verdict["verdict"] == "SUPPORTED"
+        assert result.verdict == GateVerdict.REJECT
+        assert any("self_check" in r for r in result.reasons)
+
+    def test_missing_self_check_result_is_not_treated_as_a_failure(self):
+        """Older/hand-built proposals (like the other tests in this
+        class) never set self_check_result at all - that must stay a
+        no-op, not an implicit failure, since it's a Worker Agent
+        artifact, not something every run_gate() caller is required to
+        construct."""
+        proposal = {
+            "task_description": "a proposal with no claims backing its rationale",
+            "diff": "",
+            "rationale": "trust me",
+            "claims": [],
+            "target_files": [],
+        }
+        assert "self_check_result" not in proposal
+        result = run_gate(proposal, intent_graph=IntentGraph())
+        # Falls through to Kernel's own NEI/ESCALATE path either way, but
+        # critically it does NOT raise or get REJECTed for a missing key.
+        assert result.verdict in (GateVerdict.ESCALATE, GateVerdict.PASS, GateVerdict.REJECT)
+
     def test_sentry_high_finding_rejects_before_kernel_runs(self):
         proposal = {
             "task_description": "adversarial probe",

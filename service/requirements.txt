@@ -29,3 +29,13 @@ scikit-learn
 # gate/github_action.py's PR-creation call (git CLI, already on the base
 # image, handles clone/branch/apply/commit/push).
 requests
+
+# worker_agent/self_check.py runs `sys.executable -m pytest` against a
+# temp copy of verifiers/sentry - that's THIS process's own interpreter,
+# so pytest has to be installed here too, not just in a dev environment.
+# Confirmed live: without it, self_check fails with "No module named
+# pytest" on every proposal in the deployed service. verifiers/sentry's
+# own pyproject.toml sets pythonpath=["src"] as a pytest ini option
+# (pytest>=7.0 native), so sentry.engine is importable without a
+# separate install of the sentry package itself.
+pytest>=7.0

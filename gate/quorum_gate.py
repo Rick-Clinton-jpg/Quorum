@@ -269,6 +269,16 @@ def build_claim_graph(proposal: dict) -> tuple[dict, list[dict]]:
 # ---------------------------------------------------------------------------
 
 
+def _self_check_failed(proposal: dict[str, Any]) -> bool:
+    """True only when proposal["self_check_result"]["passed"] is
+    explicitly False - a proposal missing the field entirely (older
+    fixtures, hand-built test proposals) is not treated as a failure,
+    since self_check_result is a Worker Agent artifact, not something
+    every caller of run_gate() is required to construct."""
+    self_check = proposal.get("self_check_result")
+    return isinstance(self_check, dict) and self_check.get("passed") is False
+
+
 def run_gate(
     proposal: dict[str, Any],
     intent_graph: IntentGraph,
@@ -358,6 +368,20 @@ def run_gate(
         gate_verdict = GateVerdict.ESCALATE
     elif kernel_verdict_value in _REJECT_KERNEL_VERDICTS:
         reasons.append(f"Reasoning Kernel verdict {kernel_verdict_value}: {kernel_verdict.get('detail')}")
+        gate_verdict = GateVerdict.REJECT
+    elif _self_check_failed(proposal):
+        # Found live: a proposal whose own tests never successfully ran
+        # (e.g. self_check.py couldn't even execute pytest) previously
+        # still reached PASS here, since Sentry/Kernel/IntentGraph only
+        # evaluate the diff's *content*, never whether it actually works.
+        # Missing/absent self_check_result is NOT treated as a failure
+        # (existing callers construct minimal proposals without it) -
+        # only an explicit passed=False is.
+        self_check = proposal.get("self_check_result") or {}
+        reasons.append(
+            "Worker Agent's own self_check did not pass - "
+            f"{self_check.get('pytest_summary', 'no summary available')}"
+        )
         gate_verdict = GateVerdict.REJECT
     else:
         gate_verdict = GateVerdict.PASS
