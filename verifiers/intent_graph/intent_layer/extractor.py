@@ -6,15 +6,22 @@ from embedding similarity to a known category's canonical description,
 never treated as ground truth -- a low similarity means low confidence,
 not "no match at all".
 
-Embedding backend: this module tries sentence-transformers
-(all-MiniLM-L6-v2) first, as specified in the build spec. If the model
-weights cannot be downloaded (e.g. huggingface.co is unreachable under
-this environment's network policy), it falls back automatically to a
-deterministic, fully-offline scikit-learn HashingVectorizer embedding so
-the prototype still runs with no API keys and no network dependency. See
-README.md "Known Limitations" for what this trade-off costs in practice.
+Embedding backend: defaults to the offline scikit-learn HashingVectorizer
+- fully deterministic, no API keys, no network dependency. Measured live
+(this sandbox and the deployed Cloud Run service both hit the same
+underlying cost): attempting sentence-transformers/all-MiniLM-L6-v2 first
+cost ~6.6s on EVERY cold worker, and ~6s of that was `import
+sentence_transformers` itself (it pulls in torch) - paid in full even
+though the network call that follows is what actually fails, and even
+though this deployment's real egress policy never lets it succeed. Set
+QUORUM_INTENT_EMBEDDING_BACKEND=sentence-transformers to opt back into
+attempting the real model first, e.g. in an environment where it's
+actually reachable and real semantic embeddings are worth the cold-start
+cost. See README.md "Known Limitations" for what the hashing fallback
+costs in detection quality (it's lexical, not semantic).
 """
 
+import os
 import re
 import sys
 import warnings
@@ -24,6 +31,7 @@ import numpy as np
 
 MODEL_NAME = "all-MiniLM-L6-v2"
 _EMBEDDING_BACKEND = None  # set on first use: "sentence-transformers" | "hashing-fallback"
+_ENV_VAR = "QUORUM_INTENT_EMBEDDING_BACKEND"
 
 # Known domains: label -> (keywords for direct match, canonical phrase for
 # centroid embedding). Restricted_* correspond to the abstracted
@@ -72,8 +80,24 @@ MARKER_RE = re.compile(r"^\s*\[.*\]\s*$")
 
 @lru_cache(maxsize=1)
 def _get_model():
-    """Loads the real sentence-transformer model, or None if unavailable."""
+    """Returns the real sentence-transformer model, or None to use the
+    offline hashing fallback. Hashing is the default - no import, no
+    network attempt - unless QUORUM_INTENT_EMBEDDING_BACKEND is
+    explicitly set to "sentence-transformers", since importing that
+    package alone costs ~6s (it pulls in torch) even when the network
+    call that follows is doomed to fail under this deployment's egress
+    policy. See this module's docstring for the measured numbers."""
     global _EMBEDDING_BACKEND
+
+    if os.environ.get(_ENV_VAR, "hashing").strip().lower() != "sentence-transformers":
+        _EMBEDDING_BACKEND = "hashing-fallback"
+        print(
+            "[intent_layer] Using offline hashing-vector embeddings (default). "
+            f"Set {_ENV_VAR}=sentence-transformers to opt into the real model instead.",
+            file=sys.stderr,
+        )
+        return None
+
     try:
         from sentence_transformers import SentenceTransformer
 

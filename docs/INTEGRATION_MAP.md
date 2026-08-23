@@ -294,16 +294,23 @@ is_backreference_cue`), `Edge(source, target, edge_type)`, `RiskResult
 (node_id, risk, score, components: dict, explanation: str)`.
 
 **Disclosed limitation (own README, confirmed, re-tested on a second
-machine):** the embedding backend is supposed to be
-`sentence-transformers`/`all-MiniLM-L6-v2` but falls back automatically
-to an offline scikit-learn `HashingVectorizer` if the model can't be
-downloaded — confirmed to actually be hitting this fallback in the
-repo's own test environment due to an explicit `403` egress-policy block
-on `huggingface.co`, not a hypothetical. `extractor.embedding_backend()`
-reports which backend is actually active at runtime — **check this in
-any environment IntentGraph runs in** (including Cloud Run), since the
-hashing fallback is lexical, not semantic, and changes the tool's real
-detection behavior.
+machine, and confirmed again on the deployed Cloud Run service):** the
+embedding backend defaults to an offline scikit-learn `HashingVectorizer`
+- a deliberate default as of Phase 4, not a network fallback anymore.
+It used to try `sentence-transformers`/`all-MiniLM-L6-v2` first on every
+cold start; measured live, that cost ~6.6s per cold worker (~6s of it is
+just `import sentence_transformers`, which pulls in torch), paid in full
+even though the network call that follows always failed under this
+deployment's real egress policy (`403` on `huggingface.co`, a policy
+block, not a hypothetical). Going straight to hashing dropped that to
+~0.07s with the eval's 15/15 result unchanged (the fallback is
+deterministic, and was already what every prior eval run actually used).
+Set `QUORUM_INTENT_EMBEDDING_BACKEND=sentence-transformers` to opt back
+into the real model in an environment where it's actually reachable.
+`extractor.embedding_backend()` reports which backend is actually active
+at runtime — **check this in any environment IntentGraph runs in**
+(including Cloud Run), since the hashing fallback is lexical, not
+semantic, and changes the tool's real detection behavior.
 
 Also disclosed: escalation-score signal is weak (confidence for a
 keyword-confirmed domain match is floored at 0.85, so two turns naming
