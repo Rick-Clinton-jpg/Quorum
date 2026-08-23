@@ -1,2 +1,15 @@
 # Quorum's own runtime data (audit logs, session state) - not source.
 .quorum/
+
+# Credentials - defense in depth. worker_agent/.env is already covered by
+# worker_agent/.gitignore; these patterns catch a .env or key file created
+# anywhere else in the tree (e.g. during GCP deployment work) before it
+# can ever be staged.
+.env
+.env.*
+*.env
+*-key.json
+*-keyfile.json
+service-account*.json
+gcloud-service-key.json
+.gcloud/
