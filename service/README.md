@@ -25,17 +25,16 @@ curl -X POST localhost:8080/gate/run \
 
 ## Deploy
 
-GCP project: `REDACTED-GCP-PROJECT-ID` (hackathon trial credit,
-90 days). Run these from a shell that has `gcloud` installed and
-authenticated to this project (`gcloud auth login`, then
-`gcloud config set project REDACTED-GCP-PROJECT-ID`).
+Run these from a shell that has `gcloud` installed and authenticated to
+your GCP project (`gcloud auth login`, then
+`gcloud config set project <PROJECT_ID>`).
 
 **1. One-time setup — grant Cloud Run's default service account access to
 Vertex AI (skip this and every deploy will fail on the first real
 request, not at deploy time):**
 
 ```bash
-PROJECT_ID=REDACTED-GCP-PROJECT-ID
+PROJECT_ID=<PROJECT_ID>
 PROJECT_NUMBER=$(gcloud projects describe $PROJECT_ID --format='value(projectNumber)')
 
 gcloud services enable run.googleapis.com aiplatform.googleapis.com --project=$PROJECT_ID
@@ -50,10 +49,10 @@ gcloud projects add-iam-policy-binding $PROJECT_ID \
 ```bash
 gcloud run deploy quorum-coordinator \
   --source . \
-  --project REDACTED-GCP-PROJECT-ID \
+  --project <PROJECT_ID> \
   --region us-central1 \
   --timeout 900 \
-  --set-env-vars GOOGLE_GENAI_USE_VERTEXAI=TRUE,GOOGLE_CLOUD_PROJECT=REDACTED-GCP-PROJECT-ID,GOOGLE_CLOUD_LOCATION=us-central1
+  --set-env-vars GOOGLE_GENAI_USE_VERTEXAI=TRUE,GOOGLE_CLOUD_PROJECT=<PROJECT_ID>,GOOGLE_CLOUD_LOCATION=us-central1
 ```
 
 You'll be prompted for `--allow-unauthenticated` interactively if you
