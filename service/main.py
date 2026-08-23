@@ -58,8 +58,14 @@ class GateResponse(BaseModel):
     attempts: Optional[int] = None
 
 
-@app.get("/healthz")
+@app.get("/status")
 def health_check() -> dict[str, str]:
+    # Not /healthz: confirmed live against the deployed Cloud Run service
+    # that Google's platform layer intercepts that exact path on *.run.app
+    # before it ever reaches the container (missing "server: Google
+    # Frontend" / x-cloud-trace-context headers that every real
+    # container-forwarded response carries) - a 404 from something other
+    # than this app, not a bug here.
     return {"status": "ok"}
 
 
