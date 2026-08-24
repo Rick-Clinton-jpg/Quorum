@@ -98,3 +98,19 @@ Example pull requests opened autonomously by the deployed service on a
 
 See `docs/INTEGRATION_MAP.md` for the full, disclosed limitations of
 every vendored verifier.
+
+## License
+Licensed under PolyForm Noncommercial 1.0.0 — free to use, including
+personal and research use. Commercial use requires a separate license.
+See [LICENSE](./LICENSE) for full terms, or reach out to discuss
+commercial licensing. This covers Quorum's own original code (the
+Worker Agent orchestration and service layer).
+
+Quorum vendors six independently-developed components, each under its
+own PolyForm Noncommercial 1.0.0 terms: Trust Boundary (`gate/`), the
+orchestration layer that runs the pipeline; three deterministic
+verifiers that judge every patch — Sentry, Reasoning Kernel, and
+IntentGraph (`verifiers/intent_graph/`, from the `intent-layer` repo);
+Warden, which records the audit trail; and Review-Board, a human-gated
+review step rather than an automated one. See `docs/INTEGRATION_MAP.md`
+for what each one actually does and doesn't do.
