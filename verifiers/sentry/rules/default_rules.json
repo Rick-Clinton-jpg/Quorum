@@ -34,5 +34,11 @@
     "pattern": "(?i)(urllib\\.request\\.urlopen.*json|requests\\.(post|put).*(env|environ)|httpbin\\.org|json\\.dumps.*env.*urlopen)",
     "severity": "HIGH",
     "description": "Network request containing serialized environment data"
+  },
+  {
+    "name": "fragmented_instruction_pattern",
+    "pattern": "(?i)(?:ig|ign|igno)(?:['\"]\\s*(?:\\+\\s*)?['\"]|\\s*-->\\s*<!--\\s*)(?:nore|ore|re)|(?:by|byp)(?:['\"]\\s*(?:\\+\\s*)?['\"]|\\s*-->\\s*<!--\\s*)(?:pass|ass)|(?:over|overr)(?:['\"]\\s*(?:\\+\\s*)?['\"]|\\s*-->\\s*<!--\\s*)(?:ride|ide)|(?:en|env|envir)(?:['\"]\\s*(?:\\+\\s*)?['\"]|\\s*-->\\s*<!--\\s*)(?:viron|iron|on)|sk(?:['\"]\\s*(?:\\+\\s*)?['\"]|\\s*-->\\s*<!--\\s*)ip",
+    "severity": "HIGH",
+    "description": "Sensitive terms or instructions split across string concatenations or multiple comments to evade filters"
   }
 ]
