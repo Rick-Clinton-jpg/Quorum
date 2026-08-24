@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import os
 import sys
+from pathlib import Path
 from typing import Any, Optional
 
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
@@ -23,6 +24,7 @@ if REPO_ROOT not in sys.path:
     sys.path.insert(0, REPO_ROOT)
 
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
 import gate.quorum_paths  # noqa: F401 - import first, for its sys.path side effects
@@ -32,6 +34,8 @@ from gate.github_action import ActionError, open_pr_for_proposal
 from gate.quorum_gate import GateResult, GateVerdict, run_gate
 
 app = FastAPI(title="Quorum Coordinator", version="0.1.0")
+
+_INDEX_HTML = (Path(__file__).parent / "static" / "index.html").read_text()
 
 _AUDIT = FirestoreAuditLogger(
     collection_name="quorum_audit_logs",
@@ -94,12 +98,20 @@ def _maybe_open_pr(proposal: dict[str, Any], gate_result: GateResult) -> tuple[O
         return None, str(exc)
 
 
-@app.get("/")
-def root() -> dict[str, Any]:
+@app.get("/", response_class=HTMLResponse)
+def root() -> str:
     """Confirmed live: the bare hosted URL (what's actually in Devpost's
     "Hosted project URL" field) 404'd with no route registered for it -
     a judge clicking the link landed on a blank error instead of anything
-    useful. This exists so that link works."""
+    useful. Originally this returned raw JSON, which fixed the 404 but
+    still wasn't something a judge would want to land on - this serves
+    static/index.html instead. The JSON form now lives at GET /api."""
+    return _INDEX_HTML
+
+
+@app.get("/api")
+def api_root() -> dict[str, Any]:
+    """The same overview as GET /, as JSON - for scripting against."""
     return {
         "service": "Quorum Coordinator",
         "description": "A gated coordinator for an autonomous coding agent - nothing it drafts ships until three independent, deterministic verifiers agree.",

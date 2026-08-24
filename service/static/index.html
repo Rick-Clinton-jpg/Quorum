@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Quorum — Gated Coordinator</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<style>
+  :root{
+    --bg:#0D0F14; --panel:#12141B; --border:rgba(231,233,240,0.10);
+    --text:#E7E9F0; --text-muted:#9AA0B4;
+    --accent:#8FA3E8; --pass:#6FBE8B; --escalate:#E0BD52; --reject:#E8828C;
+    --font-display:'IBM Plex Sans',ui-sans-serif,system-ui,sans-serif;
+    --font-mono:'IBM Plex Mono',ui-monospace,'SFMono-Regular',Menlo,monospace;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;}
+  body{
+    background:
+      radial-gradient(900px 600px at 85% 0%, rgba(143,163,232,0.14), transparent 60%),
+      radial-gradient(700px 500px at 5% 100%, rgba(111,190,139,0.08), transparent 60%),
+      var(--bg);
+    color:var(--text);
+    font-family:var(--font-display);
+    line-height:1.5;
+    min-height:100vh;
+  }
+  a{color:var(--accent);text-decoration:none;}
+  a:hover{text-decoration:underline;}
+  main{max-width:880px;margin:0 auto;padding:72px 28px 96px;}
+
+  .eyebrow{
+    font-family:var(--font-mono); font-size:12.5px; letter-spacing:.15em;
+    text-transform:uppercase; color:var(--accent); font-weight:600;
+  }
+  .live{
+    display:inline-flex; align-items:center; gap:7px;
+    font-family:var(--font-mono); font-size:12.5px; color:var(--text-muted);
+    margin-top:14px;
+  }
+  .live .dot{width:7px;height:7px;border-radius:50%;background:var(--pass);
+    box-shadow:0 0 0 3px rgba(111,190,139,0.18);}
+
+  h1{
+    font-weight:800; font-size:64px; letter-spacing:-.02em; line-height:1.02;
+    margin:22px 0 18px;
+  }
+  h1 span{color:var(--pass);}
+
+  .tagline{font-size:19px; color:var(--text-muted); max-width:600px; margin-bottom:36px;}
+  .tagline b{color:var(--text); font-weight:600;}
+
+  .pipeline{
+    border:1px solid var(--border); border-radius:14px; background:var(--panel);
+    padding:26px 28px; margin-bottom:40px;
+  }
+  .pipeline-title{font-family:var(--font-mono); font-size:12px; letter-spacing:.1em;
+    text-transform:uppercase; color:var(--text-muted); margin-bottom:18px;}
+  .flow{
+    display:flex; flex-wrap:wrap; align-items:center; gap:10px;
+    font-family:var(--font-mono); font-size:13.5px;
+  }
+  .flow .step{
+    border:1px solid var(--border); border-radius:8px; padding:8px 13px;
+    background:rgba(231,233,240,0.03); white-space:nowrap;
+  }
+  .flow .step.worker{color:var(--accent);}
+  .flow .arrow{color:var(--text-muted); opacity:.6;}
+  .verdicts{display:flex; gap:20px; margin-top:18px; flex-wrap:wrap;}
+  .verdict{display:flex; align-items:center; gap:7px; font-family:var(--font-mono); font-size:13px;}
+  .verdict .dot{width:8px;height:8px;border-radius:50%;}
+  .verdict .label{color:var(--text-muted);}
+  .verdict .desc{color:var(--text-muted); opacity:.75;}
+
+  .section-title{
+    font-family:var(--font-mono); font-size:12px; letter-spacing:.1em;
+    text-transform:uppercase; color:var(--text-muted); margin:0 0 14px;
+  }
+  .endpoints{border:1px solid var(--border); border-radius:14px; background:var(--panel);
+    overflow:hidden; margin-bottom:40px;}
+  .endpoint{
+    display:flex; gap:18px; align-items:baseline; padding:14px 22px;
+    border-bottom:1px solid var(--border);
+  }
+  .endpoint:last-child{border-bottom:none;}
+  .endpoint .verb{
+    font-family:var(--font-mono); font-size:12.5px; font-weight:600; color:var(--pass);
+    min-width:38px;
+  }
+  .endpoint.post .verb{color:var(--escalate);}
+  .endpoint .path{font-family:var(--font-mono); font-size:14px; color:var(--text); min-width:150px;}
+  .endpoint .desc{font-size:14px; color:var(--text-muted);}
+
+  .links{display:flex; gap:28px; flex-wrap:wrap; font-size:14.5px; margin-bottom:8px;}
+  .links a{font-family:var(--font-mono);}
+
+  footer{margin-top:56px; padding-top:22px; border-top:1px solid var(--border);
+    font-size:13px; color:var(--text-muted);}
+
+  @media (max-width:600px){
+    h1{font-size:44px;}
+    main{padding:48px 20px 72px;}
+  }
+</style>
+</head>
+<body>
+<main>
+  <div class="eyebrow">All Things Agentic Hackathon &middot; Fortified Enterprise Fleet</div>
+  <h1>QUOR<span>U</span>M</h1>
+  <div class="live"><i class="dot"></i>Live on Cloud Run</div>
+
+  <p class="tagline">
+    A gated coordinator for an <b>autonomous coding agent</b>. A Worker Agent
+    drafts small code patches; nothing it drafts ships until three
+    independent, deterministic verifiers agree.
+  </p>
+
+  <div class="pipeline">
+    <div class="pipeline-title">Pipeline</div>
+    <div class="flow">
+      <span class="step worker">Worker Agent (Gemini 3.5 via Vertex AI)</span>
+      <span class="arrow">&rarr;</span>
+      <span class="step">Proposal</span>
+      <span class="arrow">&rarr;</span>
+      <span class="step">Sentry</span>
+      <span class="arrow">&rarr;</span>
+      <span class="step">IntentGraph</span>
+      <span class="arrow">&rarr;</span>
+      <span class="step">Reasoning Kernel</span>
+    </div>
+    <div class="verdicts">
+      <span class="verdict"><i class="dot" style="background:var(--pass)"></i><span class="label">PASS</span><span class="desc">&mdash; opens a real pull request</span></span>
+      <span class="verdict"><i class="dot" style="background:var(--escalate)"></i><span class="label">ESCALATE</span><span class="desc">&mdash; pauses for a human</span></span>
+      <span class="verdict"><i class="dot" style="background:var(--reject)"></i><span class="label">REJECT</span><span class="desc">&mdash; fed back for one auto-redraft</span></span>
+    </div>
+  </div>
+
+  <div class="section-title">Endpoints</div>
+  <div class="endpoints">
+    <div class="endpoint"><span class="verb">GET</span><span class="path">/status</span><span class="desc">health check</span></div>
+    <div class="endpoint post"><span class="verb">POST</span><span class="path">/gate/run</span><span class="desc">evaluate an already-drafted proposal through the gate (no Gemini call)</span></div>
+    <div class="endpoint post"><span class="verb">POST</span><span class="path">/gate/retry</span><span class="desc">draft with the Worker Agent (Gemini 3.5 via Vertex AI) and run it through the gate</span></div>
+    <div class="endpoint"><span class="verb">GET</span><span class="path">/audit/trail</span><span class="desc">the append-only Sentry/IntentGraph/Kernel audit log</span></div>
+    <div class="endpoint"><span class="verb">GET</span><span class="path">/api</span><span class="desc">this page's content as JSON</span></div>
+    <div class="endpoint"><span class="verb">GET</span><span class="path">/docs</span><span class="desc">interactive OpenAPI docs</span></div>
+  </div>
+
+  <div class="links">
+    <a href="https://github.com/Rick-Clinton-jpg/Quorum">Repository &rarr;</a>
+    <a href="/docs">API docs &rarr;</a>
+    <a href="/audit/trail">Audit trail &rarr;</a>
+  </div>
+
+  <footer>Built for the All Things Agentic Hackathon, Fortified Enterprise Fleet track.</footer>
+</main>
+</body>
+</html>
