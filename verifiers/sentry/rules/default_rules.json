@@ -34,5 +34,11 @@
     "pattern": "(?i)(urllib\\.request\\.urlopen.*json|requests\\.(post|put).*(env|environ)|httpbin\\.org|json\\.dumps.*env.*urlopen)",
     "severity": "HIGH",
     "description": "Network request containing serialized environment data"
+  },
+  {
+    "name": "markdown_exfil_pattern",
+    "pattern": "(?i)(!?\\[[^\\]]*\\]\\(https?://[^)]+?\\?[^)]+?\\))",
+    "severity": "HIGH",
+    "description": "Markdown image or link syntax containing query parameters — potential exfil vector"
   }
 ]
