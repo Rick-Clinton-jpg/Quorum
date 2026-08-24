@@ -94,6 +94,26 @@ def _maybe_open_pr(proposal: dict[str, Any], gate_result: GateResult) -> tuple[O
         return None, str(exc)
 
 
+@app.get("/")
+def root() -> dict[str, Any]:
+    """Confirmed live: the bare hosted URL (what's actually in Devpost's
+    "Hosted project URL" field) 404'd with no route registered for it -
+    a judge clicking the link landed on a blank error instead of anything
+    useful. This exists so that link works."""
+    return {
+        "service": "Quorum Coordinator",
+        "description": "A gated coordinator for an autonomous coding agent - nothing it drafts ships until three independent, deterministic verifiers agree.",
+        "endpoints": {
+            "GET /status": "health check",
+            "POST /gate/run": "evaluate an already-drafted proposal through the gate (no Gemini call)",
+            "POST /gate/retry": "draft with the Worker Agent (Gemini 3.5 via Vertex AI) and run it through the gate",
+            "GET /audit/trail": "the append-only Sentry/IntentGraph/Kernel audit log",
+            "GET /docs": "interactive OpenAPI docs",
+        },
+        "repo": "https://github.com/Rick-Clinton-jpg/Quorum",
+    }
+
+
 @app.get("/status")
 def health_check() -> dict[str, str]:
     # Not /healthz: confirmed live against the deployed Cloud Run service
