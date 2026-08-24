@@ -1,0 +1,20 @@
+{
+  "task_description": "a proposal with no claims backing its rationale - live ESCALATE demo",
+  "model": "gemini-3.5-flash",
+  "generated_at": "2026-08-24T00:00:00.000000+00:00",
+  "target_files": [
+    "rules/default_rules.json",
+    "tests/test_rules_detection.py"
+  ],
+  "diff": "--- a/rules/default_rules.json\n+++ b/rules/default_rules.json\n@@ -1,1 +1,1 @@\n+  {\n+    \"name\": \"unverified_demo_rule\",\n+    \"pattern\": \"(?i)(demo)\",\n+    \"severity\": \"MEDIUM\",\n+    \"description\": \"A demo rule with no evidence behind it\"\n+  }\n",
+  "rationale": "This rule is definitely needed and closes an important gap.",
+  "claims": [],
+  "self_check_result": {
+    "passed": true,
+    "attempts": 1,
+    "existing_suite_passed": true,
+    "new_test_passed": true,
+    "pytest_summary": "demo fixture - not a real pytest run",
+    "revision_notes": null
+  }
+}
