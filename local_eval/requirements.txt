@@ -1,0 +1,11 @@
+# Extra dependency local_eval/eval_local_llm.py needs that the production
+# path does NOT - pulls in litellm, which is how ADK's LiteLlm wrapper
+# talks to LM Studio's OpenAI-compatible API.
+#
+# Everything else this script needs (google-adk itself, pydantic,
+# worker_agent's tools/schema/self_check, gate/quorum_gate.py and its
+# own deps) is already covered by worker_agent/requirements.txt and
+# gate/requirements-quorum.txt - install those too if you haven't.
+
+google-adk[extensions]>=2.7.1
+requests
