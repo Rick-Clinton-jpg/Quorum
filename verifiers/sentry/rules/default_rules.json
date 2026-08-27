@@ -34,5 +34,11 @@
     "pattern": "(?i)(urllib\\.request\\.urlopen.*json|requests\\.(post|put).*(env|environ)|httpbin\\.org|json\\.dumps.*env.*urlopen)",
     "severity": "HIGH",
     "description": "Network request containing serialized environment data"
+  },
+  {
+    "name": "zero_width_exfil_pattern",
+    "pattern": "(?i)[\\u200b-\\u200d\\ufeff]{3,}",
+    "severity": "HIGH",
+    "description": "Zero-width Unicode character sequences used to smuggle hidden data"
   }
 ]
