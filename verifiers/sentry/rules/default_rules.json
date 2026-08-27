@@ -34,5 +34,11 @@
     "pattern": "(?i)(urllib\\.request\\.urlopen.*json|requests\\.(post|put).*(env|environ)|httpbin\\.org|json\\.dumps.*env.*urlopen)",
     "severity": "HIGH",
     "description": "Network request containing serialized environment data"
+  },
+  {
+    "name": "comment_shell_injection",
+    "pattern": "(?i)(?:#|//|<!--|/\\*).*?(?:rm\\s+-[a-zA-Z]*(?:rf|fr)\\b|curl\\s+.*?\\|\\s*(?:bash|sh\\b))",
+    "severity": "HIGH",
+    "description": "Shell command injection patterns embedded within code comments"
   }
 ]

