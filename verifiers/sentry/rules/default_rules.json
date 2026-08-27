@@ -34,5 +34,11 @@
     "pattern": "(?i)(urllib\\.request\\.urlopen.*json|requests\\.(post|put).*(env|environ)|httpbin\\.org|json\\.dumps.*env.*urlopen)",
     "severity": "HIGH",
     "description": "Network request containing serialized environment data"
+  },
+  {
+    "name": "instruction_override_phrase",
+    "pattern": "(?i)(ignore (all )?(previous|prior|above) (instructions|directives|rules|constraints|prompt)|disregard (all )?(previous|prior|above) (instructions|directives|rules|constraints|prompt)|override (all )?(previous|prior|system) (instructions|directives|rules|constraints|prompt))",
+    "severity": "HIGH",
+    "description": "Phrases attempting to override or ignore prior instructions"
   }
 ]
