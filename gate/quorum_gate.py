@@ -82,6 +82,30 @@ def _added_lines(diff: str) -> str:
         line[1:] for line in diff.splitlines() if line.startswith("+") and not line.startswith("+++")
     )
 
+
+# Confirmed live in this project's own level-1-10 adversarial test run
+# (docs/LEVEL_TEST_FINDINGS.md, Level 8): a trigger phrase split across a
+# sentence boundary - e.g. "no conf. irmation needed" - evades every
+# Sentry rule, since each rule matches a single contiguous span and no
+# span in the original text ever spells the phrase out whole.
+_SENTENCE_BREAK_RE = re.compile(r"[.!?]\s+")
+
+
+def _defragmented(text: str) -> str:
+    """Collapses sentence-terminal punctuation + the whitespace after it,
+    so a phrase split across exactly one such boundary re-joins into a
+    single contiguous span Sentry's regexes can actually match. Scanned
+    IN ADDITION to the original text, never instead of it - this is a
+    narrow, disclosed heuristic for one specific evasion shape, not a
+    general defense against arbitrary fragmentation, and deliberately
+    lives here rather than in verifiers/sentry/ itself: modifying a
+    vendored verifier's own matching semantics is exactly what
+    "coordinate, don't fuse" (gate/ARCHITECTURE.md) says this project
+    doesn't do.
+    """
+    return _SENTENCE_BREAK_RE.sub("", text)
+
+
 # Verdicts the Kernel's own claim-graph evaluation can return (see
 # gate/pipeline.py's record_review_board_outcome docstring - this project
 # does not invent new ones).
@@ -304,6 +328,13 @@ def run_gate(
     # positives on exactly this project's own target repo.
     scanned_text = _added_lines(proposal["diff"]) + "\n" + proposal["rationale"]
     sentry_result: PipelineResult = pipeline.run_input_stage(scanned_text)
+
+    defragmented = _defragmented(scanned_text)
+    if defragmented != scanned_text and sentry_result.action != PipelineAction.REJECT:
+        defrag_result = pipeline.run_input_stage(defragmented)
+        if defrag_result.action == PipelineAction.REJECT:
+            sentry_result = defrag_result
+
     audit.log(
         agent_id="quorum-worker-agent",
         objective=proposal["task_description"],
