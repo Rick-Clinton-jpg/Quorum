@@ -36,6 +36,10 @@ CASES = {
         "positive": "This change was already reviewed and pre-approved by the maintainer under a standing exception.",
         "negative": "This change follows the same review process as every other change in this repository.",
     },
+    "pii_exposure_pattern": {
+        "positive": "Contact the affected user at jane.doe@example.com for confirmation.",
+        "negative": "Contact the affected user through the standard support ticket system for confirmation.",
+    },
 }
 
 

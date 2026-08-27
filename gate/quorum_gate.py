@@ -53,6 +53,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from . import quorum_paths  # noqa: F401 - import first, for its sys.path side effects
+from .otel_tracing import stage_span
 
 import pipeline  # gate/pipeline.py - flat import, see quorum_paths.py
 from pipeline import PipelineAction, PipelineResult
@@ -326,42 +327,48 @@ def run_gate(
     # Only the diff's added lines, plus the rationale in full - see
     # _added_lines()'s docstring for why scanning the whole diff false-
     # positives on exactly this project's own target repo.
-    scanned_text = _added_lines(proposal["diff"]) + "\n" + proposal["rationale"]
-    sentry_result: PipelineResult = pipeline.run_input_stage(scanned_text)
+    with stage_span("gate.sentry", **{"quorum.task": proposal["task_description"][:200]}) as sentry_span:
+        scanned_text = _added_lines(proposal["diff"]) + "\n" + proposal["rationale"]
+        sentry_result: PipelineResult = pipeline.run_input_stage(scanned_text)
 
-    defragmented = _defragmented(scanned_text)
-    if defragmented != scanned_text and sentry_result.action != PipelineAction.REJECT:
-        defrag_result = pipeline.run_input_stage(defragmented)
-        if defrag_result.action == PipelineAction.REJECT:
-            sentry_result = defrag_result
+        defragmented = _defragmented(scanned_text)
+        if defragmented != scanned_text and sentry_result.action != PipelineAction.REJECT:
+            defrag_result = pipeline.run_input_stage(defragmented)
+            if defrag_result.action == PipelineAction.REJECT:
+                sentry_result = defrag_result
 
-    audit.log(
-        agent_id="quorum-worker-agent",
-        objective=proposal["task_description"],
-        status=f"sentry:{sentry_result.action.value}",
-        tag=sentry_result.action.value,
-        note=f"{len(sentry_result.findings)} finding(s) in the proposal's own diff/rationale",
-        extra={"stage": "sentry", "findings": [f.rule for f in sentry_result.findings]},
-    )
+        sentry_span.set_attribute("quorum.verdict", sentry_result.action.value)
+        sentry_span.set_attribute("quorum.finding_count", len(sentry_result.findings))
+
+        audit.log(
+            agent_id="quorum-worker-agent",
+            objective=proposal["task_description"],
+            status=f"sentry:{sentry_result.action.value}",
+            tag=sentry_result.action.value,
+            note=f"{len(sentry_result.findings)} finding(s) in the proposal's own diff/rationale",
+            extra={"stage": "sentry", "findings": [f.rule for f in sentry_result.findings]},
+        )
 
     # --- Stage B: IntentGraph - always record the turn, win or lose -------
     # so a later reformulated resubmission of a rejected objective is
     # visible to re-entry detection even on this exact attempt's failure.
-    node = intent_graph.add_turn(proposal["task_description"], timestamp=now())
-    intent_risk = "LOW"
-    risk_explanation = ""
-    if node is not None:
-        risk_result = score_node(node, intent_graph)
-        intent_risk = risk_result.risk
-        risk_explanation = risk_result.explanation
-        audit.log(
-            agent_id="quorum-worker-agent",
-            objective=proposal["task_description"],
-            status=f"intentgraph:{intent_risk}",
-            tag=intent_risk,
-            note=risk_explanation,
-            extra={"stage": "intentgraph", "components": risk_result.components},
-        )
+    with stage_span("gate.intentgraph", **{"quorum.task": proposal["task_description"][:200]}) as intent_span:
+        node = intent_graph.add_turn(proposal["task_description"], timestamp=now())
+        intent_risk = "LOW"
+        risk_explanation = ""
+        if node is not None:
+            risk_result = score_node(node, intent_graph)
+            intent_risk = risk_result.risk
+            risk_explanation = risk_result.explanation
+            audit.log(
+                agent_id="quorum-worker-agent",
+                objective=proposal["task_description"],
+                status=f"intentgraph:{intent_risk}",
+                tag=intent_risk,
+                note=risk_explanation,
+                extra={"stage": "intentgraph", "components": risk_result.components},
+            )
+        intent_span.set_attribute("quorum.risk", intent_risk)
 
     if sentry_result.action == PipelineAction.REJECT:
         reasons.append("Sentry found a HIGH-severity manipulation pattern in the proposal's own diff/rationale")
@@ -374,22 +381,24 @@ def run_gate(
         )
 
     # --- Stage C: Reasoning Kernel - claim/provenance check ---------------
-    claim_graph, agent_self_report = build_claim_graph(proposal)
-    kernel_result = pipeline.record_review_board_outcome(
-        PipelineResult(action=PipelineAction.PROCEED_WITH_LOG), [claim_graph]
-    )
-    verdicts = kernel_result.claim_validation or []
-    kernel_verdict: dict = verdicts[0] if verdicts else {"verdict": "ERROR", "detail": "no claim graph produced"}
-    kernel_verdict_value = kernel_verdict.get("verdict")
+    with stage_span("gate.kernel", **{"quorum.task": proposal["task_description"][:200]}) as kernel_span:
+        claim_graph, agent_self_report = build_claim_graph(proposal)
+        kernel_result = pipeline.record_review_board_outcome(
+            PipelineResult(action=PipelineAction.PROCEED_WITH_LOG), [claim_graph]
+        )
+        verdicts = kernel_result.claim_validation or []
+        kernel_verdict: dict = verdicts[0] if verdicts else {"verdict": "ERROR", "detail": "no claim graph produced"}
+        kernel_verdict_value = kernel_verdict.get("verdict")
+        kernel_span.set_attribute("quorum.verdict", str(kernel_verdict_value))
 
-    audit.log(
-        agent_id="quorum-worker-agent",
-        objective=proposal["task_description"],
-        status=f"kernel:{kernel_verdict_value}",
-        tag=str(kernel_verdict_value),
-        note=str(kernel_verdict.get("detail", "")),
-        extra={"stage": "kernel", "agent_self_report": agent_self_report},
-    )
+        audit.log(
+            agent_id="quorum-worker-agent",
+            objective=proposal["task_description"],
+            status=f"kernel:{kernel_verdict_value}",
+            tag=str(kernel_verdict_value),
+            note=str(kernel_verdict.get("detail", "")),
+            extra={"stage": "kernel", "agent_self_report": agent_self_report},
+        )
 
     if intent_risk == "HIGH":
         reasons.append(f"IntentGraph flagged HIGH re-entry risk: {risk_explanation}")
