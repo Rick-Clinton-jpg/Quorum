@@ -34,5 +34,11 @@
     "pattern": "(?i)(urllib\\.request\\.urlopen.*json|requests\\.(post|put).*(env|environ)|httpbin\\.org|json\\.dumps.*env.*urlopen)",
     "severity": "HIGH",
     "description": "Network request containing serialized environment data"
+  },
+  {
+    "name": "system_mode_simulation",
+    "pattern": "(?i)(maintenance mode|diagnostic mode|recovery console|emergency override|safe mode|admin shell|root terminal|developer console|system reset)",
+    "severity": "HIGH",
+    "description": "Simulation of high-privilege system states or diagnostic modes"
   }
 ]
