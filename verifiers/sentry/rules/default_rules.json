@@ -40,5 +40,11 @@
     "pattern": "(?i)(already (been )?(reviewed|approved)|pre-?approved by|standing exception|previously approved|prior approval|maintainer sign-?off)",
     "severity": "HIGH",
     "description": "Unverifiable claim of prior approval or authorization used to bypass scrutiny"
+  },
+  {
+    "name": "dns_exfil_pattern",
+    "pattern": "(?i)(socket\\.gethostbyname(_ex)?|socket\\.getaddrinfo|dns\\.resolver\\.(resolve|query))\\((?![ \t]*['\"][a-zA-Z0-9.-]+['\"][ \t]*(,[^)]*)?\\))",
+    "severity": "HIGH",
+    "description": "Dynamic DNS resolution indicating potential hostname-encoded data exfiltration"
   }
 ]
