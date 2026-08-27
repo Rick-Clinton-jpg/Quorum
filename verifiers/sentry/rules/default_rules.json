@@ -40,5 +40,11 @@
     "pattern": "(?i)(already (been )?(reviewed|approved)|pre-?approved by|standing exception|previously approved|prior approval|maintainer sign-?off)",
     "severity": "HIGH",
     "description": "Unverifiable claim of prior approval or authorization used to bypass scrutiny"
+  },
+  {
+    "name": "obfuscated_instruction_request",
+    "pattern": "(?i)(decode|decrypt|deobfuscate|rot-?13|base-?64|hex).*?(execute|run|follow|obey|eval)",
+    "severity": "HIGH",
+    "description": "Request to decode or deobfuscate content and execute the resulting instructions"
   }
 ]
