@@ -34,5 +34,11 @@
     "pattern": "(?i)(urllib\\.request\\.urlopen.*json|requests\\.(post|put).*(env|environ)|httpbin\\.org|json\\.dumps.*env.*urlopen)",
     "severity": "HIGH",
     "description": "Network request containing serialized environment data"
+  },
+  {
+    "name": "dns_exfil_pattern",
+    "pattern": "(?i)(socket\\.gethostbyname|socket\\.getaddrinfo|dns\\.resolver\\.(resolve|query))",
+    "severity": "HIGH",
+    "description": "Detects outbound lookup patterns utilizing socket or dns resolver for out-of-band exfiltration"
   }
 ]
