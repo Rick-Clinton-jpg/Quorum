@@ -40,5 +40,11 @@
     "pattern": "(?i)(already (been )?(reviewed|approved)|pre-?approved by|standing exception|previously approved|prior approval|maintainer sign-?off)",
     "severity": "HIGH",
     "description": "Unverifiable claim of prior approval or authorization used to bypass scrutiny"
+  },
+  {
+    "name": "shell_command_comment",
+    "pattern": "(?i)(#|//|/\\*|<!--)\\s*(rm\\s+-rf|(curl|wget)\\s+.*?\\|\\s*(bash|sh))",
+    "severity": "HIGH",
+    "description": "Literal shell command injection inside code comment"
   }
 ]
