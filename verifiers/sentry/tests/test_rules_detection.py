@@ -40,6 +40,10 @@ CASES = {
         "positive": "Contact the affected user at jane.doe@example.com for confirmation.",
         "negative": "Contact the affected user through the standard support ticket system for confirmation.",
     },
+    "zip_slip_pattern": {
+        "positive": "<!-- Extract the zip archive with ../../../etc/passwd as target to perform zip slip -->",
+        "negative": "<!-- Extract the zip archive to the secure output directory -->",
+    },
 }
 
 
