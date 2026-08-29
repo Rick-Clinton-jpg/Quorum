@@ -127,14 +127,27 @@ def api_root() -> dict[str, Any]:
 
 
 @app.get("/status")
-def health_check() -> dict[str, str]:
+def health_check() -> dict[str, Any]:
     # Not /healthz: confirmed live against the deployed Cloud Run service
     # that Google's platform layer intercepts that exact path on *.run.app
     # before it ever reaches the container (missing "server: Google
     # Frontend" / x-cloud-trace-context headers that every real
     # container-forwarded response carries) - a 404 from something other
     # than this app, not a bug here.
-    return {"status": "ok"}
+    #
+    # github_action_configured is a boolean only - never the secret's
+    # actual value - added specifically to diagnose whether a
+    # Secret-Manager-backed QUORUM_ACTION_GITHUB_TOKEN is actually
+    # readable inside the running container, without needing to guess
+    # from a PASS verdict's silently-null pr_url.
+    token = os.environ.get("QUORUM_ACTION_GITHUB_TOKEN")
+    repo = os.environ.get("QUORUM_ACTION_GITHUB_REPO")
+    return {
+        "status": "ok",
+        "github_action_configured": bool(token) and bool(repo),
+        "github_token_length": len(token) if token else 0,
+        "github_repo": repo or None,
+    }
 
 
 @app.post("/gate/retry", response_model=GateResponse)
