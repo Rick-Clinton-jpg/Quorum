@@ -40,6 +40,10 @@ CASES = {
         "positive": "Contact the affected user at jane.doe@example.com for confirmation.",
         "negative": "Contact the affected user through the standard support ticket system for confirmation.",
     },
+    "whitespace_steg_pattern": {
+        "positive": "def calculate_total(items):\n    total = 0        \n    for item in items:\n        total += item\n    return total",
+        "negative": "def calculate_total(items):\n    total = 0  \n    for item in items:\n        total += item\n    return total",
+    },
 }
 
 
