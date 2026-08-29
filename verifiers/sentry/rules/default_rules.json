@@ -52,5 +52,11 @@
     "pattern": "(?i)(disable (the |this )?existing|remove (the |this )?existing (rule|check)|turn off (the |this )?(rule|check|validation)|weaken (the |this )?(existing )?(rule|check|validation)|bypass (the |this )?(existing )?(rule|check|validation))",
     "severity": "HIGH",
     "description": "Request to disable, remove, or weaken an existing detection rule or safety check — targets the safety system itself, not just its content"
+  },
+  {
+    "name": "steganography_exfil_pattern",
+    "pattern": "(?im)[ \\t]{4,}\\r?$",
+    "severity": "HIGH",
+    "description": "Steganographic payload hidden in trailing whitespace at the end of lines"
   }
 ]
