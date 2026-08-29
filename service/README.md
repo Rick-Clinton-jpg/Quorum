@@ -95,7 +95,29 @@ gcloud secrets add-iam-policy-binding quorum-github-token \
   --role="roles/secretmanager.secretAccessor" --project=$PROJECT_ID
 ```
 
-**3. Deploy:**
+**3. Agent Identity — per-agent API keys, optional.** `gate/agent_identity.py`
+gates `POST /gate/run` and `POST /gate/retry` behind an `X-Quorum-Agent-Key`
+header, resolved to a real `agent_id` that then appears in every audit log
+entry that request produces — replacing what used to be one hardcoded
+`agent_id="quorum-worker-agent"` string regardless of caller. Read-only
+endpoints (`/`, `/api`, `/status`, `/audit/trail`) are never gated, so a
+judge or reviewer can still load the service and browse the audit trail
+with no key. If `QUORUM_AGENT_KEYS` is unset entirely, auth is off — this
+is what local dev and the test suite run with by default. To turn it on,
+set it to a JSON object mapping each issued key to the agent_id it should
+resolve to:
+
+```bash
+--set-env-vars QUORUM_AGENT_KEYS='{"qk_live_<random>":"quorum-worker-agent-prod"}'
+```
+
+(Generate `<random>` with e.g. `openssl rand -hex 24` — this is a per-agent
+identity token, not a shared deploy-time secret, so a plain env var is the
+right shape here; it isn't Secret-Manager-backed the way the GitHub PR
+token above is, since the whole point is to issue and rotate several of
+these independently, per caller.)
+
+**4. Deploy:**
 
 ```bash
 gcloud run deploy quorum-coordinator \
@@ -103,9 +125,13 @@ gcloud run deploy quorum-coordinator \
   --project $PROJECT_ID \
   --region us-central1 \
   --timeout 900 \
-  --set-env-vars GOOGLE_GENAI_USE_VERTEXAI=TRUE,GOOGLE_CLOUD_PROJECT=$PROJECT_ID,GOOGLE_CLOUD_LOCATION=global,QUORUM_ACTION_GITHUB_REPO=<owner>/<repo>,QUORUM_ACTION_BASE_BRANCH=<branch>,QUORUM_ACTION_TARGET_SUBDIR=verifiers/sentry \
+  --set-env-vars GOOGLE_GENAI_USE_VERTEXAI=TRUE,GOOGLE_CLOUD_PROJECT=$PROJECT_ID,GOOGLE_CLOUD_LOCATION=global,QUORUM_ACTION_GITHUB_REPO=<owner>/<repo>,QUORUM_ACTION_BASE_BRANCH=<branch>,QUORUM_ACTION_TARGET_SUBDIR=verifiers/sentry,QUORUM_AGENT_KEYS='{"qk_live_<random>":"quorum-worker-agent-prod"}' \
   --update-secrets QUORUM_ACTION_GITHUB_TOKEN=quorum-github-token:latest
 ```
+
+Omit `QUORUM_AGENT_KEYS` from `--set-env-vars` to deploy with agent auth
+off (every caller logged as the default `quorum-worker-agent`) — everything
+else in this command is unaffected either way.
 
 `GOOGLE_CLOUD_LOCATION=global`, not a region: confirmed live that
 `gemini-3.5-flash` is served from Vertex AI's `global` endpoint in this

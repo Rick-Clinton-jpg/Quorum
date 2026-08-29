@@ -23,11 +23,12 @@ REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if REPO_ROOT not in sys.path:
     sys.path.insert(0, REPO_ROOT)
 
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
 import gate.quorum_paths  # noqa: F401 - import first, for its sys.path side effects
+from gate.agent_identity import API_KEY_HEADER, InvalidAgentKey, resolve_agent_id
 from gate.firestore_audit import FirestoreAuditLogger
 from gate.firestore_intent import FirestoreIntentStore
 from gate.github_action import ActionError, open_pr_for_proposal
@@ -63,6 +64,21 @@ class GateResponse(BaseModel):
     attempts: Optional[int] = None
     pr_url: Optional[str] = None
     action_error: Optional[str] = None
+    agent_id: Optional[str] = None
+
+
+def _require_agent_id(x_quorum_agent_key: Optional[str] = Header(None, alias=API_KEY_HEADER)) -> str:
+    """FastAPI dependency for the two gate-executing endpoints only - see
+    gate/agent_identity.py. Read-only/informational endpoints (/, /api,
+    /status, /audit/trail) deliberately do NOT depend on this, so a judge
+    or reviewer can still load the service and browse the audit trail
+    with no key at all; only actions that actually write a new audit
+    entry and can open a real PR require a caller identity.
+    """
+    try:
+        return resolve_agent_id(x_quorum_agent_key)
+    except InvalidAgentKey as exc:
+        raise HTTPException(status_code=401, detail=str(exc)) from exc
 
 
 def _maybe_open_pr(proposal: dict[str, Any], gate_result: GateResult) -> tuple[Optional[str], Optional[str]]:
@@ -117,9 +133,9 @@ def api_root() -> dict[str, Any]:
         "description": "A gated coordinator for an autonomous coding agent - nothing it drafts ships until three independent, deterministic verifiers agree.",
         "endpoints": {
             "GET /status": "health check",
-            "POST /gate/run": "evaluate an already-drafted proposal through the gate (no Gemini call)",
-            "POST /gate/retry": "draft with the Worker Agent (Gemini 3.5 via Vertex AI) and run it through the gate",
-            "GET /audit/trail": "the append-only Sentry/IntentGraph/Kernel audit log",
+            "POST /gate/run": "evaluate an already-drafted proposal through the gate (no Gemini call) - requires X-Quorum-Agent-Key if agent auth is enforced (see GET /status's agent_auth_enforced)",
+            "POST /gate/retry": "draft with the Worker Agent (Gemini 3.5 via Vertex AI) and run it through the gate - same auth requirement as /gate/run",
+            "GET /audit/trail": "the append-only Sentry/IntentGraph/Kernel audit log, now keyed by real per-agent identity when auth is enforced",
             "GET /docs": "interactive OpenAPI docs",
         },
         "repo": "https://github.com/Rick-Clinton-jpg/Quorum",
@@ -147,17 +163,26 @@ def health_check() -> dict[str, Any]:
         "github_action_configured": bool(token) and bool(repo),
         "github_token_length": len(token) if token else 0,
         "github_repo": repo or None,
+        # Agent Identity (gate/agent_identity.py): whether POST /gate/run
+        # and /gate/retry currently require a valid X-Quorum-Agent-Key
+        # header at all - boolean only, never the configured keys.
+        "agent_auth_enforced": bool(os.environ.get("QUORUM_AGENT_KEYS")),
     }
 
 
 @app.post("/gate/retry", response_model=GateResponse)
-def execute_retry_gate(req: RetryGateRequest) -> GateResponse:
+def execute_retry_gate(req: RetryGateRequest, agent_id: str = Depends(_require_agent_id)) -> GateResponse:
     """Draft with the Worker Agent, run it through the gate, and on
     REJECT redraft once - all inside gate/quorum_gate.py::retry_gate().
     The IntentGraph for `session_id` is loaded before and saved after,
     so re-entry detection actually works across separate calls with the
     same session_id - see gate/firestore_intent.py's docstring for why
     that wasn't true of an earlier draft of this endpoint.
+
+    `agent_id` comes from _require_agent_id (see gate/agent_identity.py)
+    - the caller's real identity, resolved from the X-Quorum-Agent-Key
+    header, not a hardcoded string - and flows into every audit.log()
+    call this request triggers.
     """
     from gate.quorum_gate import retry_gate  # deferred: same reason quorum_gate.py itself defers this import
 
@@ -169,6 +194,7 @@ def execute_retry_gate(req: RetryGateRequest) -> GateResponse:
             max_gate_attempts=req.max_gate_attempts,
             intent_graph=intent_graph,
             audit=_AUDIT,
+            agent_id=agent_id,
         )
 
         _INTENT_STORE.save_session(req.session_id, intent_graph)
@@ -183,13 +209,14 @@ def execute_retry_gate(req: RetryGateRequest) -> GateResponse:
             attempts=len(history),
             pr_url=pr_url,
             action_error=action_error,
+            agent_id=agent_id,
         )
     except Exception as exc:  # noqa: BLE001 - surface as a 500 with the real cause, not a bare 500
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
 @app.post("/gate/run", response_model=GateResponse)
-def execute_run_gate(req: RunGateRequest) -> GateResponse:
+def execute_run_gate(req: RunGateRequest, agent_id: str = Depends(_require_agent_id)) -> GateResponse:
     """Evaluate an already-drafted proposal through the gate once, no
     Worker Agent call. Mainly for replaying/debugging a specific
     proposal (e.g. the fixture in gate/tests/fixtures/) against a real
@@ -197,7 +224,7 @@ def execute_run_gate(req: RunGateRequest) -> GateResponse:
     try:
         intent_graph = _INTENT_STORE.load_session(req.session_id)
 
-        gate_result = run_gate(req.proposal, intent_graph=intent_graph, audit=_AUDIT)
+        gate_result = run_gate(req.proposal, intent_graph=intent_graph, audit=_AUDIT, agent_id=agent_id)
 
         _INTENT_STORE.save_session(req.session_id, intent_graph)
 
@@ -206,6 +233,7 @@ def execute_run_gate(req: RunGateRequest) -> GateResponse:
             verdict=gate_result.verdict.value,
             reasons=gate_result.reasons,
             proposal=req.proposal,
+            agent_id=agent_id,
         )
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=500, detail=str(exc)) from exc

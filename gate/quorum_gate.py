@@ -308,6 +308,7 @@ def run_gate(
     proposal: dict[str, Any],
     intent_graph: IntentGraph,
     audit: Optional[AuditLogger] = None,
+    agent_id: str = "quorum-worker-agent",
 ) -> GateResult:
     """Runs one Proposal through Sentry, IntentGraph, and the Reasoning
     Kernel, logging every stage via Warden, and returns a verdict.
@@ -318,6 +319,11 @@ def run_gate(
     no cross-process persistence for it yet; see this module's docstring
     in the Phase 3 report for why that's a Phase 4 (Firestore) concern,
     not something bolted on here.
+
+    `agent_id` identifies the real caller for the audit trail (see
+    gate/agent_identity.py) - defaults to the pre-Agent-Identity value so
+    every existing test and direct caller of run_gate() keeps working
+    unchanged.
     """
     audit = audit or AuditLogger(root=str(DEFAULT_AUDIT_ROOT))
     now = lambda: int(datetime.now(timezone.utc).timestamp())  # noqa: E731
@@ -341,7 +347,7 @@ def run_gate(
         sentry_span.set_attribute("quorum.finding_count", len(sentry_result.findings))
 
         audit.log(
-            agent_id="quorum-worker-agent",
+            agent_id=agent_id,
             objective=proposal["task_description"],
             status=f"sentry:{sentry_result.action.value}",
             tag=sentry_result.action.value,
@@ -361,7 +367,7 @@ def run_gate(
             intent_risk = risk_result.risk
             risk_explanation = risk_result.explanation
             audit.log(
-                agent_id="quorum-worker-agent",
+                agent_id=agent_id,
                 objective=proposal["task_description"],
                 status=f"intentgraph:{intent_risk}",
                 tag=intent_risk,
@@ -392,7 +398,7 @@ def run_gate(
         kernel_span.set_attribute("quorum.verdict", str(kernel_verdict_value))
 
         audit.log(
-            agent_id="quorum-worker-agent",
+            agent_id=agent_id,
             objective=proposal["task_description"],
             status=f"kernel:{kernel_verdict_value}",
             tag=str(kernel_verdict_value),
@@ -452,6 +458,7 @@ def retry_gate(
     max_gate_attempts: int = 2,
     intent_graph: Optional[IntentGraph] = None,
     audit: Optional[AuditLogger] = None,
+    agent_id: str = "quorum-worker-agent",
 ) -> tuple[dict, GateResult, list[dict]]:
     """Runs the Worker Agent, then the gate; on REJECT, feeds the gate's
     reasons back to the Worker Agent for one redraft - a SEPARATE, outer
@@ -465,6 +472,9 @@ def retry_gate(
     detection across those calls. Omit either to get a fresh one per call
     (this function's original, self-contained behavior - what the test
     suite exercises).
+
+    `agent_id` (see gate/agent_identity.py) identifies the real caller
+    for the audit trail; defaults to the pre-Agent-Identity value.
     """
     from worker_agent.orchestrator import run_worker_agent  # deferred: keeps `import gate.quorum_gate` cheap
 
@@ -477,7 +487,7 @@ def retry_gate(
 
     for attempt in range(1, max_gate_attempts + 1):
         proposal = run_worker_agent(description).model_dump()
-        gate_result = run_gate(proposal, intent_graph=intent_graph, audit=audit)
+        gate_result = run_gate(proposal, intent_graph=intent_graph, audit=audit, agent_id=agent_id)
         history.append(
             {
                 "attempt": attempt,

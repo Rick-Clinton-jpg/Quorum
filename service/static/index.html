@@ -140,8 +140,8 @@
   <div class="section-title">Endpoints</div>
   <div class="endpoints">
     <div class="endpoint"><span class="verb">GET</span><span class="path">/status</span><span class="desc">health check</span></div>
-    <div class="endpoint post"><span class="verb">POST</span><span class="path">/gate/run</span><span class="desc">evaluate an already-drafted proposal through the gate (no Gemini call)</span></div>
-    <div class="endpoint post"><span class="verb">POST</span><span class="path">/gate/retry</span><span class="desc">draft with the Worker Agent (Gemini 3.5 via Vertex AI) and run it through the gate</span></div>
+    <div class="endpoint post"><span class="verb">POST</span><span class="path">/gate/run</span><span class="desc">evaluate an already-drafted proposal through the gate (no Gemini call) &mdash; requires an X-Quorum-Agent-Key header when agent auth is enforced (see /status)</span></div>
+    <div class="endpoint post"><span class="verb">POST</span><span class="path">/gate/retry</span><span class="desc">draft with the Worker Agent (Gemini 3.5 via Vertex AI) and run it through the gate &mdash; same agent-key requirement as /gate/run</span></div>
     <div class="endpoint"><span class="verb">GET</span><span class="path">/audit/trail</span><span class="desc">the append-only Sentry/IntentGraph/Kernel audit log</span></div>
     <div class="endpoint"><span class="verb">GET</span><span class="path">/api</span><span class="desc">this page's content as JSON</span></div>
     <div class="endpoint"><span class="verb">GET</span><span class="path">/docs</span><span class="desc">interactive OpenAPI docs</span></div>

@@ -85,6 +85,20 @@ check "PII detection rule" "$([ "$PII_RESULT" = "REJECT" ] && echo 1 || echo 0)"
 
 echo ""
 echo "=============================================================="
+echo "6b. Agent Identity — per-agent API keys on /gate/run and /gate/retry"
+echo "=============================================================="
+AUTH_ENFORCED=$(curl -sS "$SERVICE_URL/status" | jq -r '.agent_auth_enforced')
+echo "agent_auth_enforced: $AUTH_ENFORCED"
+if [ "$AUTH_ENFORCED" = "true" ]; then
+  UNAUTH_CODE=$(curl -sS -o /dev/null -w "%{http_code}" -X POST "$SERVICE_URL/gate/run" -H "Content-Type: application/json" -d '{"proposal": {"task_description": "diagnosis - unauthenticated probe", "diff": "+placeholder", "rationale": "n/a", "claims": [], "target_files": []}, "session_id": "diagnosis-auth"}')
+  echo "unauthenticated call HTTP status: $UNAUTH_CODE"
+  check "Agent Identity blocks an unkeyed call" "$([ "$UNAUTH_CODE" = "401" ] && echo 1 || echo 0)" "got HTTP $UNAUTH_CODE, expected 401"
+else
+  check "Agent Identity status reachable (auth not yet enforced on this deploy)" 1 "agent_auth_enforced=$AUTH_ENFORCED - set QUORUM_AGENT_KEYS to turn it on, see service/README.md"
+fi
+
+echo ""
+echo "=============================================================="
 echo "8. A clean PASS still opens a real PR (full pipeline, live Gemini)"
 echo "=============================================================="
 PASS_JSON=$(curl -sS -X POST "$SERVICE_URL/gate/retry" -H "Content-Type: application/json" -d '{"task_description": "Sentry has six default detection rules, and none of them examine for exfiltration via steganographic payloads hidden in whitespace-only differences at the end of otherwise normal lines. Check whether this is a real, exploitable gap, and if so, add one new detection rule, plus test cases, that closes it, following the existing rule conventions exactly.", "session_id": "diagnosis-pass", "max_gate_attempts": 2}')
@@ -129,7 +143,7 @@ echo "=============================================================="
 if [ -d "worker_agent/.venv" ]; then
   source worker_agent/.venv/bin/activate 2>/dev/null
 fi
-TEST_OUTPUT=$(python3 -m pytest gate/tests/ verifiers/sentry/tests/ -q 2>&1 | tail -5)
+TEST_OUTPUT=$(python3 -m pytest gate/tests/ verifiers/sentry/tests/ service/tests/ -q 2>&1 | tail -5)
 echo "$TEST_OUTPUT"
 check "local test suite" "$(echo "$TEST_OUTPUT" | grep -q "passed" && ! echo "$TEST_OUTPUT" | grep -q "failed" && echo 1 || echo 0)" "$(echo "$TEST_OUTPUT" | tail -1)"
 

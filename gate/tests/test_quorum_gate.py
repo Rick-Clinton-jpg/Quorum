@@ -19,6 +19,7 @@ from gate.quorum_gate import (
 )
 
 from intent_layer import IntentGraph
+from warden.audit import AuditLogger
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -255,3 +256,24 @@ class TestRunGate:
         )
         second = run_gate(retry, intent_graph=shared_graph)
         assert second.intent_risk in ("MEDIUM", "HIGH")
+
+    def test_agent_id_flows_into_every_audit_log_entry(self, markdown_exfil_proposal, tmp_path):
+        """Agent Identity (gate/agent_identity.py): the audit trail must
+        record the real caller, not the pre-Agent-Identity hardcoded
+        "quorum-worker-agent" string, once a caller passes one in."""
+        audit = AuditLogger(root=str(tmp_path))
+        run_gate(
+            markdown_exfil_proposal,
+            intent_graph=IntentGraph(),
+            audit=audit,
+            agent_id="agent-alpha",
+        )
+        records = audit.read(limit=50)
+        assert records, "expected at least one audit record"
+        assert all(r["agent_id"] == "agent-alpha" for r in records)
+
+    def test_agent_id_defaults_to_pre_agent_identity_value(self, markdown_exfil_proposal, tmp_path):
+        audit = AuditLogger(root=str(tmp_path))
+        run_gate(markdown_exfil_proposal, intent_graph=IntentGraph(), audit=audit)
+        records = audit.read(limit=50)
+        assert records and all(r["agent_id"] == "quorum-worker-agent" for r in records)

@@ -46,3 +46,9 @@ opentelemetry-exporter-gcp-trace>=1.6.0
 # (pytest>=7.0 native), so sentry.engine is importable without a
 # separate install of the sentry package itself.
 pytest>=7.0
+
+# FastAPI's TestClient (service/tests/test_main.py, Agent Identity's
+# HTTP-layer tests) needs httpx even though the app itself never calls
+# out over HTTP - not a runtime dependency of main.py, just of testing it
+# with the same interpreter self_check.py already requires pytest for.
+httpx>=0.27.0
