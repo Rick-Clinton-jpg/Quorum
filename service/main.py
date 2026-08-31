@@ -282,6 +282,11 @@ def execute_retry_gate(req: RetryGateRequest, agent_id: str = Depends(_require_a
                 intent_graph=intent_graph,
                 audit=_AUDIT,
                 agent_id=agent_id,
+                # Saves after EVERY attempt, not just once at the end -
+                # see retry_gate()'s persist_intent_graph docstring for
+                # why a single save-at-the-end loses a REJECT's
+                # safety-boundary node if a later attempt then fails.
+                persist_intent_graph=lambda: _INTENT_STORE.save_session(req.session_id, intent_graph),
             )
 
             _INTENT_STORE.save_session(req.session_id, intent_graph)

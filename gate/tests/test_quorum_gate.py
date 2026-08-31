@@ -277,6 +277,43 @@ class TestRunGate:
         second = run_gate(retry, intent_graph=shared_graph)
         assert second.intent_risk in ("MEDIUM", "HIGH")
 
+    def test_internal_redraft_with_high_intent_risk_does_not_force_escalate(self, markdown_exfil_proposal):
+        """retry_gate()'s own redraft loop restates the prior REJECT's
+        reasons in the next attempt's task_description - IntentGraph can
+        legitimately score that as similar to the safety-boundary node
+        the SAME call's own prior attempt just added, and flag HIGH
+        against the system's own honest recovery, not an external
+        adversary. is_internal_redraft=True must not let that force
+        ESCALATE.
+
+        Patches score_node() to deterministically return HIGH rather
+        than trying to construct real text that reliably crosses the
+        vendored scorer's actual threshold - scorer.py's hard gate
+        requires a boundary node sharing the querying node's real
+        lineage_root (verifiers/intent_graph/intent_layer/scorer.py),
+        which isn't reliably reproducible from outside from text
+        content alone. This isolates exactly the branching logic being
+        tested (does is_internal_redraft suppress HIGH-driven ESCALATE)
+        from the separate, already-disclosed question of when the real
+        scorer decides to return HIGH at all."""
+        from unittest.mock import patch
+
+        from intent_layer.scorer import RiskResult
+
+        proposal = dict(markdown_exfil_proposal)
+        high_risk = RiskResult(node_id="n0", risk="HIGH", score=0.95, explanation="simulated HIGH for this test")
+
+        with patch("gate.quorum_gate.score_node", return_value=high_risk):
+            baseline = run_gate(proposal, intent_graph=IntentGraph(), is_internal_redraft=False)
+            redrafted = run_gate(proposal, intent_graph=IntentGraph(), is_internal_redraft=True)
+
+        assert baseline.verdict == GateVerdict.ESCALATE
+        assert "IntentGraph flagged HIGH re-entry risk" in "; ".join(baseline.reasons)
+
+        assert redrafted.intent_risk == "HIGH"  # still recorded, still visible to a future call
+        assert "IntentGraph flagged HIGH re-entry risk" not in "; ".join(redrafted.reasons)
+        assert redrafted.verdict != GateVerdict.ESCALATE
+
     def test_agent_id_flows_into_every_audit_log_entry(self, markdown_exfil_proposal, tmp_path):
         """Agent Identity (gate/agent_identity.py): the audit trail must
         record the real caller, not the pre-Agent-Identity hardcoded

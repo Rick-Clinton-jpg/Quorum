@@ -50,7 +50,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from . import quorum_paths  # noqa: F401 - import first, for its sys.path side effects
 from .otel_tracing import stage_span
@@ -318,6 +318,7 @@ def run_gate(
     intent_graph: IntentGraph,
     audit: Optional[AuditLogger] = None,
     agent_id: str = "quorum-worker-agent",
+    is_internal_redraft: bool = False,
 ) -> GateResult:
     """Runs one Proposal through Sentry, IntentGraph, and the Reasoning
     Kernel, logging every stage via Warden, and returns a verdict.
@@ -328,6 +329,21 @@ def run_gate(
     no cross-process persistence for it yet; see this module's docstring
     in the Phase 3 report for why that's a Phase 4 (Firestore) concern,
     not something bolted on here.
+
+    `is_internal_redraft`: True only for retry_gate()'s own automated
+    redraft attempts (attempt > 1 within one retry_gate() call), never
+    for a genuinely new, separate call. A redraft's task_description
+    deliberately restates the prior REJECT's reasons ("A previous
+    attempt was REJECTED for: ... Address this specifically in your
+    redraft") - IntentGraph can legitimately score that as similar to
+    the safety-boundary node retry_gate()'s own prior attempt just
+    added, and flag HIGH re-entry risk against the system's own honest
+    recovery attempt, not an external adversary reformulating a
+    rejected idea. When True, the turn is still added to intent_graph
+    (still visible to a FUTURE, separate call's re-entry check - Stage
+    B's whole point) and Sentry/Kernel still fully gate the redraft's
+    actual new content, but a HIGH IntentGraph score alone won't force
+    ESCALATE on this specific redraft.
 
     `agent_id` identifies the real caller for the audit trail (see
     gate/agent_identity.py) - defaults to the pre-Agent-Identity value so
@@ -420,7 +436,13 @@ def run_gate(
             extra={"stage": "kernel", "agent_self_report": agent_self_report},
         )
 
-    if intent_risk == "HIGH":
+    # Recorded either way (audit.log() above already ran), but a HIGH
+    # score from retry_gate()'s own internal redraft attempt doesn't
+    # force ESCALATE by itself - see is_internal_redraft's docstring.
+    # Falls through to the kernel-verdict checks below either way, since
+    # this isn't a mutually-exclusive "instead of," just "not blocking
+    # for this specific reason."
+    if intent_risk == "HIGH" and not is_internal_redraft:
         reasons.append(f"IntentGraph flagged HIGH re-entry risk: {risk_explanation}")
         gate_verdict = GateVerdict.ESCALATE
     elif kernel_verdict_value in _ESCALATE_KERNEL_VERDICTS:
@@ -473,6 +495,7 @@ def retry_gate(
     intent_graph: Optional[IntentGraph] = None,
     audit: Optional[AuditLogger] = None,
     agent_id: str = "quorum-worker-agent",
+    persist_intent_graph: Optional[Callable[[], None]] = None,
 ) -> tuple[dict, GateResult, list[dict]]:
     """Runs the Worker Agent, then the gate; on REJECT, feeds the gate's
     reasons back to the Worker Agent for one redraft - a SEPARATE, outer
@@ -489,6 +512,17 @@ def retry_gate(
 
     `agent_id` (see gate/agent_identity.py) identifies the real caller
     for the audit trail; defaults to the pre-Agent-Identity value.
+
+    `persist_intent_graph`, if supplied, is called immediately after
+    EVERY attempt - not just once after this whole function returns.
+    This is deliberate, not an optimization: a REJECT's safety-boundary
+    IntentGraph node must be durably saved BEFORE the next attempt's
+    redraft begins, not bundled into one save that only happens once the
+    entire retry sequence completes. Without this, a REJECT followed by
+    the next attempt's own model call failing (WorkerAgentCallError)
+    would lose the boundary marker entirely - it was added to the
+    in-memory graph, but the caller's save (previously only reachable
+    after retry_gate() returned normally) never got a chance to run.
     """
     from worker_agent.orchestrator import run_worker_agent  # deferred: keeps `import gate.quorum_gate` cheap
 
@@ -533,7 +567,18 @@ def retry_gate(
 
     for attempt in range(1, max_gate_attempts + 1):
         proposal = run_worker_agent(description).model_dump()
-        gate_result = run_gate(proposal, intent_graph=intent_graph, audit=audit, agent_id=agent_id)
+        gate_result = run_gate(
+            proposal,
+            intent_graph=intent_graph,
+            audit=audit,
+            agent_id=agent_id,
+            # See run_gate()'s is_internal_redraft docstring: only True
+            # for attempt > 1, and only because THIS SAME retry_gate()
+            # call's own prior REJECT put a boundary node in the graph -
+            # never true for a caller's first attempt, which is exactly
+            # as scrutinized by IntentGraph as it always was.
+            is_internal_redraft=(attempt > 1),
+        )
         history.append(
             {
                 "attempt": attempt,
@@ -541,6 +586,9 @@ def retry_gate(
                 "reasons": gate_result.reasons,
             }
         )
+
+        if persist_intent_graph is not None:
+            persist_intent_graph()
 
         if gate_result.verdict != GateVerdict.REJECT:
             break
