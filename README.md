@@ -28,6 +28,24 @@ PASS / REJECT / ESCALATE
 
 Live on Cloud Run: `https://quorum-coordinator-497954606552.us-central1.run.app`
 
+## Failure handling, tested not just described
+
+- **Firestore unavailable** (audit trail or IntentGraph session state):
+  falls back to local disk automatically, including mid-write on a live
+  Firestore failure — `gate/tests/test_firestore_audit.py::test_falls_back_to_disk_on_live_firestore_write_failure`
+  and the equivalent in `test_firestore_intent.py` simulate the outage,
+  not just describe the intended behavior.
+- **The Gemini/Vertex AI call itself fails** (timeout, rate limit,
+  transient outage): raises a typed `WorkerAgentCallError`
+  (`worker_agent/orchestrator.py`), mapped by `service/main.py` to a
+  502, not a generic 500 — a caller can tell "the upstream model call
+  failed, retry" apart from "something here is actually broken." Tested
+  by mocking the ADK call to fail (`worker_agent/tests/test_orchestrator.py`).
+- **The Worker Agent's own self-check runs sandboxed**: patches are
+  applied and tested in a throwaway temp copy of the target repo
+  (`worker_agent/self_check.py`) — the real vendored `verifiers/sentry/`
+  tree is never touched by anything the agent drafts.
+
 Built for the All Things Agentic Hackathon, The Taskmaster track.
 
 ## Repository layout

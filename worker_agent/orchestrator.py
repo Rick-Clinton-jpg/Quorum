@@ -20,6 +20,18 @@ APP_NAME = "quorum-worker-agent"
 MAX_ATTEMPTS = 2  # one draft + one agent-driven revision, per the Phase 2 brief
 
 
+class WorkerAgentCallError(RuntimeError):
+    """The call to the underlying model (Gemini via ADK/Vertex AI) itself
+    failed - a network error, timeout, rate limit, or any other failure
+    of the external call. Distinct from the plain RuntimeError below
+    (the call succeeded but produced no usable structured draft) and
+    from a bug in this project's own code: this failure originates
+    outside it. service/main.py maps this to a 502, not a generic 500,
+    so a caller can tell "the upstream model call failed, try again"
+    apart from "something is actually broken here."
+    """
+
+
 async def _run_worker_agent_async(task_description: str) -> Proposal:
     agent = build_worker_agent()
     runner = InMemoryRunner(agent=agent, app_name=APP_NAME)
@@ -36,7 +48,12 @@ async def _run_worker_agent_async(task_description: str) -> Proposal:
     revision_notes: str | None = None
 
     for attempt in range(1, MAX_ATTEMPTS + 1):
-        await runner.run_debug(message, user_id=user_id, session_id=session_id, quiet=True)
+        try:
+            await runner.run_debug(message, user_id=user_id, session_id=session_id, quiet=True)
+        except Exception as exc:
+            raise WorkerAgentCallError(
+                f"Worker Agent's call to Gemini (via ADK) failed on attempt {attempt}: {exc}"
+            ) from exc
         session = await runner.session_service.get_session(
             app_name=APP_NAME, user_id=user_id, session_id=session_id
         )

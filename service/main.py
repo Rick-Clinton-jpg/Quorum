@@ -33,6 +33,7 @@ from gate.firestore_audit import FirestoreAuditLogger
 from gate.firestore_intent import FirestoreIntentStore
 from gate.github_action import ActionError, open_pr_for_proposal
 from gate.quorum_gate import GateResult, GateVerdict, run_gate
+from worker_agent.orchestrator import WorkerAgentCallError
 
 app = FastAPI(title="Quorum Coordinator", version="0.1.0")
 
@@ -211,6 +212,12 @@ def execute_retry_gate(req: RetryGateRequest, agent_id: str = Depends(_require_a
             action_error=action_error,
             agent_id=agent_id,
         )
+    except WorkerAgentCallError as exc:
+        # The upstream Gemini/Vertex AI call itself failed (timeout, rate
+        # limit, transient outage) - distinct from a bug in this project's
+        # own code. 502, not 500, so a caller can tell "the model call
+        # failed, retry" apart from "something here is actually broken."
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
     except Exception as exc:  # noqa: BLE001 - surface as a 500 with the real cause, not a bare 500
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 

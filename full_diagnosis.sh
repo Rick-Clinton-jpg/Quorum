@@ -150,7 +150,7 @@ echo "=============================================================="
 if [ -d "worker_agent/.venv" ]; then
   source worker_agent/.venv/bin/activate 2>/dev/null
 fi
-TEST_OUTPUT=$(python3 -m pytest gate/tests/ verifiers/sentry/tests/ service/tests/ -q 2>&1 | tail -5)
+TEST_OUTPUT=$(python3 -m pytest gate/tests/ verifiers/sentry/tests/ service/tests/ worker_agent/tests/ -q 2>&1 | tail -5)
 echo "$TEST_OUTPUT"
 check "local test suite" "$(echo "$TEST_OUTPUT" | grep -q "passed" && ! echo "$TEST_OUTPUT" | grep -q "failed" && echo 1 || echo 0)" "$(echo "$TEST_OUTPUT" | tail -1)"
 

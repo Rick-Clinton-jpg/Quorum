@@ -10,12 +10,14 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient
 
 from gate.agent_identity import API_KEY_HEADER
 from service.main import app
+from worker_agent.orchestrator import WorkerAgentCallError
 
 FIXTURES = Path(__file__).parent.parent.parent / "gate" / "tests" / "fixtures"
 
@@ -90,3 +92,15 @@ def test_gate_run_audit_trail_records_the_resolved_agent_id(monkeypatch, reject_
     trail = client.get("/audit/trail", params={"session": "agent-alpha", "limit": 10}).json()
     assert trail["records"], "expected at least one audit record under agent-alpha"
     assert all(r["agent_id"] == "agent-alpha" for r in trail["records"])
+
+
+def test_gate_retry_maps_worker_agent_call_failure_to_502_not_500(monkeypatch):
+    """If the Worker Agent's own call to Gemini fails (timeout, rate
+    limit, transient outage), the caller must be able to tell that apart
+    from an actual bug in this project's own code - 502, not a generic
+    500."""
+    monkeypatch.delenv("QUORUM_AGENT_KEYS", raising=False)
+    with patch("gate.quorum_gate.retry_gate", side_effect=WorkerAgentCallError("simulated Vertex AI outage")):
+        resp = client.post("/gate/retry", json={"task_description": "probe", "session_id": "worker-agent-failure-test"})
+    assert resp.status_code == 502
+    assert "simulated Vertex AI outage" in resp.json()["detail"]
