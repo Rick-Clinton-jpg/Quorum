@@ -7,9 +7,9 @@ if Firestore isn't configured - see those modules' docstrings - so this
 runs locally with zero GCP setup, same behavior either way except where
 state is actually kept).
 
-Not deployed yet. Deploying is a deliberate later step, once the
-hackathon's GCP credit lands - see service/README.md for exactly what
-that step is and why it's separate from everything in this file.
+Live on Cloud Run - see service/README.md for the deploy steps. (This
+docstring previously said "Not deployed yet" long after that stopped
+being true - a small, honest fix, not a functional one.)
 """
 
 from __future__ import annotations
@@ -25,7 +25,7 @@ if REPO_ROOT not in sys.path:
 
 from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.responses import HTMLResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 import gate.quorum_paths  # noqa: F401 - import first, for its sys.path side effects
 from gate.agent_identity import API_KEY_HEADER, InvalidAgentKey, resolve_agent_id
@@ -35,6 +35,7 @@ from gate.github_action import ActionError, open_pr_for_proposal
 from gate.quorum_gate import GateResult, GateVerdict, run_gate
 from gate.redaction import scrub_pii
 from worker_agent.orchestrator import WorkerAgentCallError
+from worker_agent.schema import Claim
 
 app = FastAPI(title="Quorum Coordinator", version="0.1.0")
 
@@ -46,16 +47,49 @@ _AUDIT = FirestoreAuditLogger(
 )
 _INTENT_STORE = FirestoreIntentStore(collection_name="quorum_intent_sessions")
 
+# A session_id ends up as (part of) a Firestore document path
+# (gate/firestore_intent.py, gate/firestore_audit.py) - unconstrained,
+# a slash or an otherwise-invalid path segment either breaks that path
+# or silently forces the local fallback with no error surfaced.
+_SESSION_ID_PATTERN = r"^[A-Za-z0-9_-]{1,128}$"
+
 
 class RetryGateRequest(BaseModel):
-    task_description: str
-    max_gate_attempts: int = 2
-    session_id: str = "default-session"
+    task_description: str = Field(min_length=1, max_length=5000)
+    max_gate_attempts: int = Field(default=2, ge=1, le=5)
+    session_id: str = Field(default="default-session", pattern=_SESSION_ID_PATTERN)
+
+
+class ProposalIn(BaseModel):
+    """Request-layer validation for POST /gate/run's proposal field.
+
+    Deliberately its own model, not worker_agent.schema.Proposal reused
+    directly - that model requires self_check_result, correct for what
+    run_worker_agent() always produces, but /gate/run exists specifically
+    to replay/debug an already-drafted proposal without necessarily
+    running a self-check first (see gate/quorum_gate.py's
+    _self_check_failed() docstring for that same documented tolerance).
+
+    Before this model existed, proposal was `dict[str, Any]` - a
+    malformed nested field (wrong type, a claim missing a required key)
+    failed deep inside run_gate() as an unhandled KeyError/TypeError,
+    surfacing as an opaque 500 instead of a clean, immediate 422 at the
+    request boundary.
+    """
+
+    task_description: str = Field(min_length=1, max_length=5000)
+    diff: str = ""
+    rationale: str = Field(default="", max_length=20000)
+    claims: list[Claim] = Field(default_factory=list)
+    target_files: list[str] = Field(default_factory=list)
+    self_check_result: Optional[dict[str, Any]] = None
+    model: Optional[str] = None
+    generated_at: Optional[str] = None
 
 
 class RunGateRequest(BaseModel):
-    proposal: dict[str, Any]
-    session_id: str = "default-session"
+    proposal: ProposalIn
+    session_id: str = Field(default="default-session", pattern=_SESSION_ID_PATTERN)
 
 
 class GateResponse(BaseModel):
@@ -238,10 +272,11 @@ def execute_run_gate(req: RunGateRequest, agent_id: str = Depends(_require_agent
     proposal (e.g. the fixture in gate/tests/fixtures/) against a real
     session's IntentGraph state, without spending a Gemini call."""
     try:
+        proposal_dict = req.proposal.model_dump()
         with _INTENT_STORE.session_lock(req.session_id):
             intent_graph = _INTENT_STORE.load_session(req.session_id)
 
-            gate_result = run_gate(req.proposal, intent_graph=intent_graph, audit=_AUDIT, agent_id=agent_id)
+            gate_result = run_gate(proposal_dict, intent_graph=intent_graph, audit=_AUDIT, agent_id=agent_id)
 
             _INTENT_STORE.save_session(req.session_id, intent_graph)
 
@@ -249,7 +284,7 @@ def execute_run_gate(req: RunGateRequest, agent_id: str = Depends(_require_agent
             session_id=req.session_id,
             verdict=gate_result.verdict.value,
             reasons=gate_result.reasons,
-            proposal=req.proposal,
+            proposal=proposal_dict,
             agent_id=agent_id,
         )
     except Exception as exc:  # noqa: BLE001

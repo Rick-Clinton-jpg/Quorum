@@ -79,9 +79,17 @@ def _added_lines(diff: str) -> str:
     env_exfil_pattern/network_exfil_pattern rules on content nobody is
     proposing to add. Unchanged/removed lines were already accepted in a
     prior commit; what the gate needs to check is what's new.
+
+    Excludes `+++ ` (with the trailing space) specifically, not any line
+    starting with `++` - a real unified-diff file header always has that
+    space before the path (`+++ b/some/file`). The looser check excluded
+    a genuinely ADDED line from the safety scan whenever its own content
+    happened to start with `++` (e.g. an added source line like
+    `++counter;`), which is exactly the content this function exists to
+    scan, not skip.
     """
     return "\n".join(
-        line[1:] for line in diff.splitlines() if line.startswith("+") and not line.startswith("+++")
+        line[1:] for line in diff.splitlines() if line.startswith("+") and not line.startswith("+++ ")
     )
 
 

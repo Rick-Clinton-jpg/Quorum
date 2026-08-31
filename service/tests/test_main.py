@@ -125,3 +125,48 @@ def test_gate_retry_maps_worker_agent_call_failure_to_502_not_500(monkeypatch):
         resp = client.post("/gate/retry", json={"task_description": "probe", "session_id": "worker-agent-failure-test"})
     assert resp.status_code == 502
     assert "simulated Vertex AI outage" in resp.json()["detail"]
+
+
+def test_malformed_nested_claim_returns_422_not_500(monkeypatch):
+    """Confirmed missing before this fix: proposal was dict[str, Any],
+    so a malformed nested field (here: a claim missing 'confidence' and
+    'origin', both required) failed deep inside run_gate()'s
+    build_claim_graph() as an unhandled KeyError, surfacing as an opaque
+    500 instead of a clean 422 at the request boundary - before Gemini
+    or the gate ever ran."""
+    monkeypatch.delenv("QUORUM_AGENT_KEYS", raising=False)
+    resp = client.post(
+        "/gate/run",
+        json={
+            "proposal": {
+                "task_description": "probe",
+                "diff": "+placeholder",
+                "rationale": "n/a",
+                "claims": [{"id": "C0", "statement": "missing required fields"}],
+                "target_files": [],
+            },
+            "session_id": "malformed-claim-test",
+        },
+    )
+    assert resp.status_code == 422
+
+
+def test_empty_task_description_returns_422():
+    resp = client.post("/gate/run", json={"proposal": {"task_description": "", "diff": "", "rationale": "", "claims": [], "target_files": []}})
+    assert resp.status_code == 422
+
+
+def test_zero_max_gate_attempts_returns_422_not_a_crash():
+    """Before this fix, max_gate_attempts=0 made retry_gate()'s
+    `for attempt in range(1, 1)` loop never execute, leaving
+    gate_result as None and failing its own internal assertion - an
+    unhandled AssertionError, not a clean validation error."""
+    resp = client.post("/gate/retry", json={"task_description": "probe", "max_gate_attempts": 0})
+    assert resp.status_code == 422
+
+
+def test_session_id_with_a_slash_returns_422():
+    """session_id ends up as part of a Firestore document path - a
+    slash breaks that path outright."""
+    resp = client.post("/gate/retry", json={"task_description": "probe", "session_id": "not/a/valid/path"})
+    assert resp.status_code == 422

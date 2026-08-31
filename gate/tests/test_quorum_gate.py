@@ -13,6 +13,7 @@ import pytest
 
 from gate.quorum_gate import (
     GateVerdict,
+    _added_lines,
     build_claim_graph,
     determine_claim_origin,
     run_gate,
@@ -27,6 +28,25 @@ FIXTURES = Path(__file__).parent / "fixtures"
 @pytest.fixture
 def markdown_exfil_proposal() -> dict:
     return json.loads((FIXTURES / "markdown_exfil_proposal.json").read_text())
+
+
+class TestAddedLines:
+    def test_a_real_diff_header_is_excluded(self):
+        diff = "--- a/x.py\n+++ b/x.py\n@@ -1,1 +1,2 @@\n line one\n+line two\n"
+        assert _added_lines(diff) == "line two"
+
+    def test_an_added_line_starting_with_double_plus_is_NOT_dropped(self):
+        """Confirmed as a real gap: the old check excluded any line
+        starting with '++', not just a genuine '+++ ' file header - a
+        real added line whose own content starts with '++' (e.g. a
+        C-style increment) was silently skipped from Sentry's scan
+        instead of being exactly the new content it exists to inspect."""
+        diff = "--- a/x.py\n+++ b/x.py\n@@ -1,1 +1,2 @@\n line one\n+++counter meaning something suspicious\n"
+        assert _added_lines(diff) == "++counter meaning something suspicious"
+
+    def test_removed_and_context_lines_are_excluded(self):
+        diff = "--- a/x.py\n+++ b/x.py\n@@ -1,2 +1,2 @@\n context\n-removed\n+added\n"
+        assert _added_lines(diff) == "added"
 
 
 class TestDetermineClaimOrigin:
