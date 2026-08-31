@@ -194,15 +194,19 @@ Example pull requests opened autonomously by the deployed service on a
   the diff that adds it, trips the rule it's demonstrating) — closing
   it properly needs Sentry to treat a diff's own test/example content
   differently from its detection logic, not just one more regex.
-- Claim verification (`determine_claim_origin`) is lexical-overlap
-  based, not semantic. A negated claim (containing "not"/"never"/etc.)
-  now always falls back to REPORTED rather than being confirmable by
-  keyword presence — cheap to fool otherwise, since a large source file
-  discussing the claim's subject in prose will often contain *some*
-  unrelated negation somewhere. A positively-phrased false claim, whose
-  cited source specifically negates it, is still not caught here — that
-  class of check is the Reasoning Kernel's job (semantic), not this
-  fallback's (lexical).
+- Claim verification (`determine_claim_origin`) is lexical, not
+  semantic — it can confirm a claim quotes its source accurately, not
+  that the claim's underlying assertion is true. VERIFIED is granted
+  only from an exact quoted span found verbatim at a specific line;
+  keyword/topic overlap alone (even 100% of a claim's distinctive
+  words, with no negation and no quotes) can only ever produce
+  REPORTED now — independently re-audited to close a positively-phrased
+  false claim ("The gate rejects supported Kernel claims" — actually
+  false) that survived an earlier, narrower negation-only fix. A claim
+  that never quotes anything verbatim from its cited source is
+  REPORTED regardless of how true it actually is — confirming an
+  *unquoted* factual assertion is the Reasoning Kernel's job
+  (semantic), not this fallback's (lexical).
 
 See `docs/INTEGRATION_MAP.md` for the full, disclosed limitations of
 every vendored verifier.
