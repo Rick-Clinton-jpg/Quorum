@@ -160,13 +160,31 @@ def run_self_check(draft: DraftProposal, attempt: int) -> tuple[SelfCheckResult,
         for rel_path, content in files.items():
             (tmp_sentry / rel_path).write_text(content)
 
-        result = subprocess.run(
-            [sys.executable, "-m", "pytest", "-v", "tests"],
-            cwd=tmp_sentry,
-            capture_output=True,
-            text=True,
-            timeout=120,
-        )
+        try:
+            result = subprocess.run(
+                [sys.executable, "-m", "pytest", "-v", "tests"],
+                cwd=tmp_sentry,
+                capture_output=True,
+                text=True,
+                timeout=120,
+            )
+        except subprocess.TimeoutExpired as exc:
+            # Previously uncaught: a hung/runaway self-check pytest run
+            # (e.g. a draft that introduces an infinite loop in its own
+            # test) propagated as a raw TimeoutExpired all the way to a
+            # 500, instead of degrading to a clean failed self-check the
+            # way build_patch()'s PatchError already does above. A
+            # timeout IS a self-check failure, not a server error.
+            return (
+                SelfCheckResult(
+                    passed=False,
+                    attempts=attempt,
+                    existing_suite_passed=False,
+                    new_test_passed=False,
+                    pytest_summary=f"self-check pytest run timed out after {exc.timeout}s",
+                ),
+                diff,
+            )
 
     combined = result.stdout + result.stderr
     passed = result.returncode == 0

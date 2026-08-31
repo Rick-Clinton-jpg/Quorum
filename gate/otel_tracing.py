@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import logging
 import os
+import sys
 from contextlib import contextmanager
 from typing import Any, Iterator, Optional
 
@@ -98,21 +99,54 @@ def stage_span(name: str, **attributes: Any) -> Iterator[Any]:
     span itself, so the caller can attach outcome attributes (verdict,
     status) once the stage's actual result is known, the same way
     Warden's audit.log() records outcome after the fact rather than
-    only at entry. Tracing is strictly additive: any failure here is
-    caught and logged, never raised, so a tracing outage can never turn
-    into a gate outage."""
+    only at entry. Tracing is strictly additive: any failure in
+    SETTING UP tracing is caught and logged, never raised, so a tracing
+    outage can never turn into a gate outage.
+
+    Deliberately does NOT wrap `yield span` in the same try/except as
+    span setup. Confirmed live (external parallel review): a real
+    exception raised by the CALLER's own code inside `with
+    stage_span(...):` gets thrown into this generator at the yield
+    point - catching that here and yielding _NullSpan() again violates
+    the @contextmanager protocol (a generator that catches an injected
+    exception must stop, not yield again) and Python raises
+    `RuntimeError: generator didn't stop after throw()` instead,
+    completely replacing whatever the caller's real failure was. "Tracing
+    is additive" means a tracing SETUP failure can't break the gate - it
+    never meant a real gate-logic exception should be swallowed and
+    replaced by a confusing, unrelated one.
+    """
     tracer = _init_tracer()
     if tracer is None:
         yield _NullSpan()
         return
 
     try:
-        with tracer.start_as_current_span(name) as span:
-            for key, value in attributes.items():
-                if value is None:
-                    continue
-                span.set_attribute(key, value if isinstance(value, (str, int, float, bool)) else str(value))
-            yield span
-    except Exception as exc:  # noqa: BLE001 - tracing is additive, never load-bearing
-        logger.warning("OTel span %r failed (%s) - continuing without tracing for this stage.", name, exc)
+        span_cm = tracer.start_as_current_span(name)
+        span = span_cm.__enter__()
+        for key, value in attributes.items():
+            if value is None:
+                continue
+            span.set_attribute(key, value if isinstance(value, (str, int, float, bool)) else str(value))
+    except Exception as exc:  # noqa: BLE001 - span *setup* failed; tracing is additive
+        logger.warning("OTel span %r failed to start (%s) - continuing without tracing for this stage.", name, exc)
         yield _NullSpan()
+        return
+
+    try:
+        yield span
+    except BaseException:
+        # The caller's own code raised inside the `with` block - record
+        # it on the span (best-effort, itself guarded so a tracing
+        # failure here can't mask it either), then always re-raise the
+        # real exception, unmodified.
+        try:
+            span_cm.__exit__(*sys.exc_info())
+        except Exception:  # noqa: BLE001
+            pass
+        raise
+    else:
+        try:
+            span_cm.__exit__(None, None, None)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("OTel span %r failed to close cleanly (%s)", name, exc)
