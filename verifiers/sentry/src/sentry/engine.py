@@ -3,11 +3,29 @@
 from __future__ import annotations
 
 import json
-import re
+# stdlib `re` has no way to bound a match's wall-clock time - a
+# catastrophic-backtracking pattern (e.g. "(a|aa)+b") runs to
+# completion or not at all, and rules/default_rules.json is exactly
+# the file Quorum's Worker Agent proposes diffs to (see
+# verifiers/sentry/rules/default_rules.json's own git history and
+# gate/tests/fixtures/escalate_demo_proposal.json), so an
+# agent-drafted pattern reaching this file is untrusted input, not a
+# maintainer-reviewed one. The third-party `regex` module is a
+# near-drop-in replacement that accepts a real `timeout=` on
+# match/search/finditer, enforced during matching (confirmed against
+# an actual "(a|aa)+b" x 30 char runaway locally: raises TimeoutError
+# at the budget instead of hanging) - a per-pattern denylist of "risky
+# shapes" would only be a real ReDoS defense until the next shape.
+import regex
 from dataclasses import dataclass
 from pathlib import Path
 
 VALID_SEVERITIES = {"HIGH", "MEDIUM", "LOW"}
+
+# Generous for any legitimate rule against realistic proposal-sized text
+# (all current default rules finish in well under a millisecond) while
+# still bounding the worst case to a small, fixed cost per rule per scan.
+RULE_TIMEOUT_SECONDS = 1.0
 
 # rules/default_rules.json lives at the repo root, two levels above this file
 # (src/sentry/engine.py -> src/sentry -> src -> repo root).
@@ -20,7 +38,7 @@ class Rule:
     pattern: str
     severity: str
     description: str
-    regex: re.Pattern
+    regex: regex.Pattern
 
 
 @dataclass(frozen=True)
@@ -80,8 +98,8 @@ def load_rules(path: str | Path = DEFAULT_RULES_PATH) -> list[Rule]:
             )
 
         try:
-            regex = re.compile(pattern)
-        except re.error as exc:
+            compiled = regex.compile(pattern)
+        except regex.error as exc:
             raise RuleLoadError(f"Rule {name!r} has an invalid regex pattern {pattern!r}: {exc}") from exc
 
         rules.append(
@@ -90,7 +108,7 @@ def load_rules(path: str | Path = DEFAULT_RULES_PATH) -> list[Rule]:
                 pattern=pattern,
                 severity=severity,
                 description=description,
-                regex=regex,
+                regex=compiled,
             )
         )
 
@@ -104,7 +122,30 @@ def scan(text: str, rules: list[Rule] | None = None) -> list[Match]:
 
     matches: list[Match] = []
     for rule in rules:
-        for m in rule.regex.finditer(text):
+        try:
+            rule_matches = list(rule.regex.finditer(text, timeout=RULE_TIMEOUT_SECONDS))
+        except TimeoutError:
+            # Fail closed, not open: a pattern that can't be safely
+            # evaluated within budget is itself the finding - forced to
+            # HIGH regardless of the rule's own declared severity, since
+            # "this rule is a ReDoS risk against real input" outranks
+            # whatever the rule was originally meant to detect. Text is
+            # not echoed back here (unlike a normal Match) since the
+            # scanned content that triggered the runaway match may be
+            # large or itself sensitive.
+            matches.append(
+                Match(
+                    rule=rule.name,
+                    severity="HIGH",
+                    description=f"rule {rule.name!r} exceeded its {RULE_TIMEOUT_SECONDS}s matching budget "
+                    "against this input - unsafe to evaluate, treated as a finding rather than skipped",
+                    start=0,
+                    end=len(text),
+                    text="",
+                )
+            )
+            continue
+        for m in rule_matches:
             matches.append(
                 Match(
                     rule=rule.name,

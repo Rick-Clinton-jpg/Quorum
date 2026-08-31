@@ -47,6 +47,15 @@ opentelemetry-exporter-gcp-trace>=1.6.0
 # separate install of the sentry package itself.
 pytest>=7.0
 
+# sentry.engine imports this directly (not stdlib re) so rule matching
+# can be bounded by a real wall-clock timeout - rules/default_rules.json
+# is a file the Worker Agent proposes diffs to, so a rule's pattern is
+# untrusted input. gate/quorum_paths.py puts verifiers/sentry/src on
+# sys.path directly rather than pip-installing the Sentry package
+# (see that module's docstring), so this process needs `regex` itself
+# installed here, the same way it needs pytest above for the same reason.
+regex>=2023.0.0
+
 # FastAPI's TestClient (service/tests/test_main.py, Agent Identity's
 # HTTP-layer tests) needs httpx even though the app itself never calls
 # out over HTTP - not a runtime dependency of main.py, just of testing it

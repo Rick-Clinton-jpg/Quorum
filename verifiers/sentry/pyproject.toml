@@ -14,6 +14,11 @@ classifiers = [
     "Programming Language :: Python :: 3",
     "Operating System :: OS Independent",
 ]
+# `regex`, not stdlib `re`: rules are matched against agent-drafted
+# patterns (rules/default_rules.json is a file the Worker Agent proposes
+# diffs to) and stdlib re has no way to bound a catastrophic-backtracking
+# match's wall-clock time. See engine.py's RULE_TIMEOUT_SECONDS.
+dependencies = ["regex>=2023.0.0"]
 
 [project.urls]
 Homepage = "https://github.com/Rick-Clinton-jpg/Sentry"
