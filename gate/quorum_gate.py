@@ -486,6 +486,38 @@ def retry_gate(
 
     intent_graph = intent_graph if intent_graph is not None else IntentGraph()
     audit = audit if audit is not None else AuditLogger(root=str(DEFAULT_AUDIT_ROOT))
+    now = lambda: int(datetime.now(timezone.utc).timestamp())  # noqa: E731
+
+    # --- Preflight: scan the RAW, caller-supplied task_description, ------
+    # before it ever reaches Gemini. run_gate()'s own Sentry stage only
+    # scans the agent's OWN diff/rationale, never the task that produced
+    # them - a caller-supplied task containing PII or an injection
+    # pattern would previously reach the Worker Agent, get echoed into
+    # ADK's own session state, and only get caught (if at all) after a
+    # real model call already happened. Reuses the identical Sentry
+    # pipeline run_gate() uses (same ruleset - PII, injection patterns,
+    # all of it), so nothing new to maintain here.
+    preflight_result: PipelineResult = pipeline.run_input_stage(task_description)
+    if preflight_result.action == PipelineAction.REJECT:
+        audit.log(
+            agent_id=agent_id,
+            objective=task_description,
+            status="preflight:REJECT",
+            tag="REJECT",
+            note=f"{len(preflight_result.findings)} finding(s) in the raw task description, before any model call",
+            extra={"stage": "preflight", "findings": [f.rule for f in preflight_result.findings]},
+        )
+        intent_graph.add_turn("[SAFETY BOUNDARY TRIGGERED]", timestamp=now())
+        return (
+            {},
+            GateResult(
+                verdict=GateVerdict.REJECT,
+                reasons=["Preflight: Sentry found a HIGH-severity pattern in the raw task description, before any Gemini call"],
+                sentry_action=preflight_result.action.value,
+            ),
+            [],
+        )
+
     description = task_description
     history: list[dict] = []
     proposal: dict = {}
