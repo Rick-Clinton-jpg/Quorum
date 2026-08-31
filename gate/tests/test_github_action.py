@@ -81,6 +81,24 @@ def test_run_converts_hang_to_action_error_instead_of_blocking_forever():
             _run(["git", "push"])
 
 
+def test_run_redacts_the_token_from_a_failing_commands_error_message():
+    """Confirmed live-exploitable (round-3 external review): the
+    authenticated remote URL (https://x-access-token:{token}@github.com/...)
+    is passed directly as one of the command's own arguments to
+    subprocess.run. A failing command previously put that raw token
+    straight into ActionError's message via ' '.join(cmd) -
+    service/main.py returns that message verbatim as `action_error` in
+    the public /gate/retry API response. Mirrors the real shape exactly:
+    the secret lives in one of cmd's own arguments, not just in stderr,
+    and the command genuinely fails (not mocked) so a regression here
+    can't hide behind a mocked subprocess.run."""
+    secret = "ghp_live_secret_should_never_appear_xyz"
+    with pytest.raises(ActionError) as exc_info:
+        _run(["false", f"https://x-access-token:{secret}@github.com/o/r.git"], redact=secret)
+    assert secret not in str(exc_info.value), "the raw token leaked into the ActionError message"
+    assert "REDACTED" in str(exc_info.value)
+
+
 def test_git_failure_surfaces_as_action_error():
     with patch("gate.github_action._run") as mock_run:
         mock_run.side_effect = ActionError("command failed: git clone ...\nfatal: repo not found")

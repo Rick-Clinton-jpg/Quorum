@@ -75,8 +75,8 @@ def open_pr_for_proposal(
     remote_url = f"https://x-access-token:{token}@github.com/{repo}.git"
 
     with tempfile.TemporaryDirectory() as tmp:
-        _run(["git", "clone", "--depth", "1", "--branch", base_branch, remote_url, tmp])
-        _run(["git", "-C", tmp, "checkout", "-b", branch])
+        _run(["git", "clone", "--depth", "1", "--branch", base_branch, remote_url, tmp], redact=token)
+        _run(["git", "-C", tmp, "checkout", "-b", branch], redact=token)
 
         diff_path = os.path.join(tmp, "_quorum_proposal.diff")
         with open(diff_path, "w") as f:
@@ -86,19 +86,19 @@ def open_pr_for_proposal(
             apply_cmd += ["--directory", target_subdir]
         apply_cmd.append("_quorum_proposal.diff")
         try:
-            _run(apply_cmd)
+            _run(apply_cmd, redact=token)
         finally:
             os.remove(diff_path)
 
         _run(["git", "-C", tmp, "-c", "user.name=quorum-gate",
               "-c", "user.email=quorum-gate@users.noreply.github.com",
-              "add", "-A"])
+              "add", "-A"], redact=token)
         commit_title = f"Quorum auto-PR: {str(proposal.get('task_description', ''))[:72]}"
         _run(["git", "-C", tmp, "-c", "user.name=quorum-gate",
               "-c", "user.email=quorum-gate@users.noreply.github.com",
-              "commit", "-m", commit_title])
-        commit_sha = _run(["git", "-C", tmp, "rev-parse", "HEAD"]).strip()
-        _run(["git", "-C", tmp, "push", "origin", branch])
+              "commit", "-m", commit_title], redact=token)
+        commit_sha = _run(["git", "-C", tmp, "rev-parse", "HEAD"], redact=token).strip()
+        _run(["git", "-C", tmp, "push", "origin", branch], redact=token)
 
     pr_body = (
         "Opened automatically by Quorum's coordinator on a gate PASS verdict "
@@ -120,13 +120,33 @@ def open_pr_for_proposal(
         timeout=30,
     )
     if resp.status_code >= 300:
-        raise ActionError(f"GitHub PR creation failed: {resp.status_code} {resp.text}")
+        raise ActionError(_redact(f"GitHub PR creation failed: {resp.status_code} {resp.text}", token))
 
     pr = resp.json()
     return {"pr_url": pr["html_url"], "commit_sha": commit_sha, "branch": branch}
 
 
-def _run(cmd: list[str]) -> str:
+def _redact(text: str, secret: Optional[str]) -> str:
+    """Scrubs `secret` (the raw GitHub token) out of `text` before it can
+    reach an ActionError message. Confirmed live-exploitable: the
+    authenticated remote URL (`https://x-access-token:{token}@github.com/...`)
+    is passed directly in a subprocess command list, and a failed `git
+    clone`/`push`/etc. previously put that raw token straight into
+    ActionError's message - which service/main.py returns verbatim as
+    `action_error` in the public API response. Every call site in this
+    module now passes `redact=token` so this can't regress silently."""
+    # A minimum length guard, not just a null check: a trivially short
+    # "secret" (a test fixture using token="t", say) would otherwise
+    # nuke every occurrence of that character in ordinary text - found
+    # exactly that way, via a test using a one-character token that
+    # corrupted "GitHub" into "Gi***REDACTED***Hub". Real GitHub tokens
+    # are always 40+ characters, so this costs nothing in production.
+    if not secret or len(secret) < 8:
+        return text
+    return text.replace(secret, "***REDACTED***")
+
+
+def _run(cmd: list[str], *, redact: Optional[str] = None) -> str:
     # subprocess.run raises OSError (FileNotFoundError when the binary
     # itself is missing, PermissionError, etc.) directly from the exec
     # call - that's a different failure mode than a non-zero exit code,
@@ -139,12 +159,12 @@ def _run(cmd: list[str]) -> str:
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
     except OSError as exc:
-        raise ActionError(f"could not run command: {' '.join(cmd)}\n{exc}") from exc
+        raise ActionError(_redact(f"could not run command: {' '.join(cmd)}\n{exc}", redact)) from exc
     except subprocess.TimeoutExpired as exc:
         # Previously unbounded: a stalled network mid-clone/push would
         # hang the request indefinitely instead of failing cleanly, same
         # failure shape the OSError case above was already fixed for.
-        raise ActionError(f"command timed out after 60s: {' '.join(cmd)}") from exc
+        raise ActionError(_redact(f"command timed out after 60s: {' '.join(cmd)}", redact)) from exc
     if result.returncode != 0:
-        raise ActionError(f"command failed: {' '.join(cmd)}\n{result.stderr}")
+        raise ActionError(_redact(f"command failed: {' '.join(cmd)}\n{result.stderr}", redact))
     return result.stdout
