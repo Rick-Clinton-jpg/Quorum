@@ -16,6 +16,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from gate.agent_identity import API_KEY_HEADER
+from gate.quorum_gate import GateResult, GateVerdict
 from service.main import app
 from worker_agent.orchestrator import WorkerAgentCallError
 
@@ -170,3 +171,48 @@ def test_session_id_with_a_slash_returns_422():
     slash breaks that path outright."""
     resp = client.post("/gate/retry", json={"task_description": "probe", "session_id": "not/a/valid/path"})
     assert resp.status_code == 422
+
+
+def _fake_pass_result():
+    return ({"task_description": "probe", "diff": "+x", "rationale": "r"}, GateResult(verdict=GateVerdict.PASS, reasons=[]), [{"attempt": 1, "gate_verdict": "PASS", "reasons": []}])
+
+
+def test_idempotency_key_returns_cached_response_without_rerunning_the_workflow(monkeypatch):
+    monkeypatch.delenv("QUORUM_AGENT_KEYS", raising=False)
+    with patch("gate.quorum_gate.retry_gate") as mock_retry:
+        mock_retry.return_value = _fake_pass_result()
+        body = {"task_description": "idempotency probe", "session_id": "idem-test-1", "idempotency_key": "key-abc-123"}
+
+        first = client.post("/gate/retry", json=body)
+        second = client.post("/gate/retry", json=body)
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert first.json() == second.json()
+    mock_retry.assert_called_once()  # the second call must NOT have re-run the workflow
+
+
+def test_idempotency_key_reused_with_different_payload_returns_409(monkeypatch):
+    monkeypatch.delenv("QUORUM_AGENT_KEYS", raising=False)
+    with patch("gate.quorum_gate.retry_gate") as mock_retry:
+        mock_retry.return_value = _fake_pass_result()
+        client.post("/gate/retry", json={"task_description": "first task", "session_id": "idem-test-2", "idempotency_key": "key-xyz-456"})
+        resp = client.post("/gate/retry", json={"task_description": "a totally different task", "session_id": "idem-test-2", "idempotency_key": "key-xyz-456"})
+
+    assert resp.status_code == 409
+
+
+def test_failed_workflow_releases_the_idempotency_key_for_retry(monkeypatch):
+    """A failed attempt must not permanently strand the key as PENDING -
+    a real retry needs to be able to succeed."""
+    monkeypatch.delenv("QUORUM_AGENT_KEYS", raising=False)
+    with patch("gate.quorum_gate.retry_gate") as mock_retry:
+        mock_retry.side_effect = [RuntimeError("simulated failure"), _fake_pass_result()]
+        body = {"task_description": "probe", "session_id": "idem-test-3", "idempotency_key": "key-retry-789"}
+
+        first = client.post("/gate/retry", json=body)
+        second = client.post("/gate/retry", json=body)
+
+    assert first.status_code == 500
+    assert second.status_code == 200
+    assert mock_retry.call_count == 2

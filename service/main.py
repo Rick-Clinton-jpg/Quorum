@@ -17,7 +17,7 @@ from __future__ import annotations
 import os
 import sys
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if REPO_ROOT not in sys.path:
@@ -32,6 +32,7 @@ from gate.agent_identity import API_KEY_HEADER, InvalidAgentKey, resolve_agent_i
 from gate.firestore_audit import FirestoreAuditLogger
 from gate.firestore_intent import FirestoreIntentStore
 from gate.github_action import ActionError, open_pr_for_proposal
+from gate.idempotency import IdempotencyInProgress, IdempotencyKeyReused, IdempotencyStore
 from gate.quorum_gate import GateResult, GateVerdict, run_gate
 from gate.redaction import scrub_pii
 from worker_agent.orchestrator import WorkerAgentCallError
@@ -46,6 +47,7 @@ _AUDIT = FirestoreAuditLogger(
     fallback_root=os.path.join(REPO_ROOT, ".quorum"),
 )
 _INTENT_STORE = FirestoreIntentStore(collection_name="quorum_intent_sessions")
+_IDEMPOTENCY = IdempotencyStore(collection_name="quorum_idempotency")
 
 # A session_id ends up as (part of) a Firestore document path
 # (gate/firestore_intent.py, gate/firestore_audit.py) - unconstrained,
@@ -58,6 +60,12 @@ class RetryGateRequest(BaseModel):
     task_description: str = Field(min_length=1, max_length=5000)
     max_gate_attempts: int = Field(default=2, ge=1, le=5)
     session_id: str = Field(default="default-session", pattern=_SESSION_ID_PATTERN)
+    # Optional, caller-supplied - see gate/idempotency.py. A client
+    # retry (their own network timeout, even though the server actually
+    # completed) or an ambiguous GitHub timeout must not duplicate a
+    # Gemini call, a git push, or a PR. Omit it to get the previous,
+    # unprotected behavior - every call runs, unconditionally.
+    idempotency_key: Optional[str] = Field(default=None, max_length=200)
 
 
 class ProposalIn(BaseModel):
@@ -101,6 +109,16 @@ class GateResponse(BaseModel):
     pr_url: Optional[str] = None
     action_error: Optional[str] = None
     agent_id: Optional[str] = None
+    # Confirmed missing before this field existed: a PASS verdict did
+    # not guarantee a PR actually got opened - missing GitHub config
+    # silently produced pr_url=None, indistinguishable from "the action
+    # ran and failed" without this field, and forcing every caller to
+    # infer intent from an absent value instead of being told directly.
+    # "not_applicable" - verdict wasn't PASS, no action was ever due.
+    # "not_configured" - PASS, but no GitHub token/repo configured.
+    # "completed" - PASS, action attempted and succeeded (pr_url set).
+    # "failed" - PASS, action attempted and failed (action_error set).
+    action_status: Literal["not_applicable", "not_configured", "completed", "failed"] = "not_applicable"
 
 
 def _require_agent_id(x_quorum_agent_key: Optional[str] = Header(None, alias=API_KEY_HEADER)) -> str:
@@ -117,21 +135,25 @@ def _require_agent_id(x_quorum_agent_key: Optional[str] = Header(None, alias=API
         raise HTTPException(status_code=401, detail=str(exc)) from exc
 
 
-def _maybe_open_pr(proposal: dict[str, Any], gate_result: GateResult) -> tuple[Optional[str], Optional[str]]:
+def _maybe_open_pr(proposal: dict[str, Any], gate_result: GateResult) -> tuple[Optional[str], Optional[str], str]:
     """The Phase 2 terminal action: on PASS, and only if the deployment
     has actually configured QUORUM_ACTION_GITHUB_TOKEN, open a real PR
     via gate/github_action.py. Absence of the token means the action is
     off (e.g. running locally) - that's not an error. A configured token
     that then fails IS surfaced via action_error, not swallowed - a
     failed action on a PASS verdict is something the caller needs to
-    know about."""
+    know about.
+
+    Returns (pr_url, action_error, action_status) - see GateResponse's
+    action_status docstring for what each status value means and why it
+    exists (a PASS verdict alone never guaranteed an action occurred)."""
     if gate_result.verdict != GateVerdict.PASS:
-        return None, None
+        return None, None, "not_applicable"
 
     token = os.environ.get("QUORUM_ACTION_GITHUB_TOKEN")
     repo = os.environ.get("QUORUM_ACTION_GITHUB_REPO")
     if not token or not repo:
-        return None, None
+        return None, None, "not_configured"
 
     base_branch = os.environ.get("QUORUM_ACTION_BASE_BRANCH", "main")
     target_subdir = os.environ.get("QUORUM_ACTION_TARGET_SUBDIR")
@@ -145,9 +167,9 @@ def _maybe_open_pr(proposal: dict[str, Any], gate_result: GateResult) -> tuple[O
             target_subdir=target_subdir,
             token=token,
         )
-        return result["pr_url"], None
+        return result["pr_url"], None, "completed"
     except ActionError as exc:
-        return None, str(exc)
+        return None, str(exc), "failed"
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -220,8 +242,29 @@ def execute_retry_gate(req: RetryGateRequest, agent_id: str = Depends(_require_a
     - the caller's real identity, resolved from the X-Quorum-Agent-Key
     header, not a hardcoded string - and flows into every audit.log()
     call this request triggers.
+
+    `idempotency_key`, if supplied, is atomically claimed before any
+    Gemini call or gate run happens (see gate/idempotency.py) - a client
+    retry with the same key/payload gets the cached response instead of
+    duplicating the work; a failed attempt releases its claim so a real
+    retry isn't permanently stuck.
     """
     from gate.quorum_gate import retry_gate  # deferred: same reason quorum_gate.py itself defers this import
+
+    idempotency_payload = {
+        "task_description": req.task_description,
+        "max_gate_attempts": req.max_gate_attempts,
+        "session_id": req.session_id,
+    }
+    if req.idempotency_key:
+        try:
+            cached = _IDEMPOTENCY.claim(req.idempotency_key, idempotency_payload)
+        except IdempotencyKeyReused as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except IdempotencyInProgress as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        if cached is not None:
+            return GateResponse(**cached)
 
     try:
         # Held across the whole load -> mutate -> save sequence, not just
@@ -243,9 +286,9 @@ def execute_retry_gate(req: RetryGateRequest, agent_id: str = Depends(_require_a
 
             _INTENT_STORE.save_session(req.session_id, intent_graph)
 
-        pr_url, action_error = _maybe_open_pr(proposal, gate_result)
+        pr_url, action_error, action_status = _maybe_open_pr(proposal, gate_result)
 
-        return GateResponse(
+        response = GateResponse(
             session_id=req.session_id,
             verdict=gate_result.verdict.value,
             reasons=gate_result.reasons,
@@ -253,15 +296,23 @@ def execute_retry_gate(req: RetryGateRequest, agent_id: str = Depends(_require_a
             attempts=len(history),
             pr_url=pr_url,
             action_error=action_error,
+            action_status=action_status,
             agent_id=agent_id,
         )
+        if req.idempotency_key:
+            _IDEMPOTENCY.complete(req.idempotency_key, response.model_dump())
+        return response
     except WorkerAgentCallError as exc:
+        if req.idempotency_key:
+            _IDEMPOTENCY.release(req.idempotency_key)
         # The upstream Gemini/Vertex AI call itself failed (timeout, rate
         # limit, transient outage) - distinct from a bug in this project's
         # own code. 502, not 500, so a caller can tell "the model call
         # failed, retry" apart from "something here is actually broken."
         raise HTTPException(status_code=502, detail=scrub_pii(str(exc))) from exc
     except Exception as exc:  # noqa: BLE001 - surface as a 500 with the real cause, not a bare 500
+        if req.idempotency_key:
+            _IDEMPOTENCY.release(req.idempotency_key)
         raise HTTPException(status_code=500, detail=scrub_pii(str(exc))) from exc
 
 
