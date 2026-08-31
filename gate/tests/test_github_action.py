@@ -14,7 +14,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from gate.github_action import ActionError, _run, open_pr_for_proposal
+from gate.github_action import ActionError, _defang, _run, open_pr_for_proposal
 from gate.quorum_gate import GateResult, GateVerdict
 
 PROPOSAL = {
@@ -140,3 +140,41 @@ def test_happy_path_returns_pr_url_and_commit_sha():
         assert len(apply_calls) == 1
         assert "--directory" in apply_calls[0].args[0]
         assert "verifiers/sentry" in apply_calls[0].args[0]
+
+
+def test_defang_breaks_a_mention_without_changing_visible_text():
+    assert "@octocat" not in _defang("cc @octocat please review")
+    # Still visually "@octocat" - a zero-width space, not a visible change.
+    assert _defang("cc @octocat please review").replace("​", "") == "cc @octocat please review"
+
+
+def test_pii_and_mentions_in_task_rationale_are_scrubbed_before_reaching_the_pr_body():
+    """Confirmed missing: run_gate()'s Sentry scan only inspects the
+    proposal's diff/rationale as an in-memory object - it never sees what
+    this module builds from task_description/rationale afterward. A PR
+    body containing raw PII or a real @mention would be public and
+    permanent on GitHub. Asserts on the actual JSON POSTed to GitHub's
+    API, not just that some redaction function exists somewhere."""
+    proposal = dict(
+        PROPOSAL,
+        task_description="Contact jane.doe@example.com and cc @octocat about this",
+        rationale="SSN on file: 123-45-6789, loop in @some-team",
+    )
+    with patch("gate.github_action._run") as mock_run, \
+         patch("gate.github_action.requests.post") as mock_post, \
+         patch("builtins.open", MagicMock()), \
+         patch("os.remove", MagicMock()):
+        mock_run.return_value = "02315a1df14f5997d62bae76512eecd4db64166\n"
+        mock_post.return_value = MagicMock(
+            status_code=201,
+            json=lambda: {"html_url": "https://github.com/o/r/pull/1"},
+        )
+
+        open_pr_for_proposal(proposal, _pass_result(), repo="o/r", base_branch="main", token="t")
+
+        posted_json = mock_post.call_args.kwargs["json"]
+        assert "jane.doe@example.com" not in posted_json["body"]
+        assert "123-45-6789" not in posted_json["body"]
+        assert "@octocat" not in posted_json["body"]
+        assert "@some-team" not in posted_json["body"]
+        assert "@octocat" not in posted_json["title"]

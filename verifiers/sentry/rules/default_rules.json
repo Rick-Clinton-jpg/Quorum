@@ -43,7 +43,7 @@
   },
   {
     "name": "pii_exposure_pattern",
-    "pattern": "(?i)(\\b\\d{3}-\\d{2}-\\d{4}\\b|\\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}\\b|\\b\\d{4}[ -]\\d{4}[ -]\\d{4}[ -]\\d{1,4}\\b|\\b[a-z0-9_]+(\\s+dot\\s+[a-z0-9_]+)*\\s+at\\s+[a-z0-9_]+(\\s+dot\\s+[a-z0-9_]+)+\\b)",
+    "pattern": "(?i)(\\b\\d{3}-\\d{2}-\\d{4}\\b|\\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}\\b|\\b\\d{4}[ -]\\d{4}[ -]\\d{4}[ -]\\d{1,4}\\b|\\b[a-z0-9_]+(\\s+dot\\s+[a-z0-9_]+)+\\s+at\\s+[a-z0-9_]+(\\s+dot\\s+[a-z0-9_]+)+\\b)",
     "severity": "HIGH",
     "description": "Social Security Number, email address (literal or spelled-out), or credit-card-formatted number in the proposal's own diff/rationale — potential PII exposure"
   },

@@ -36,9 +36,8 @@ echo "=============================================================="
 STATUS_JSON=$(curl -sS "$SERVICE_URL/status")
 echo "$STATUS_JSON" | jq .
 CONFIGURED=$(echo "$STATUS_JSON" | jq -r '.github_action_configured')
-TOKLEN=$(echo "$STATUS_JSON" | jq -r '.github_token_length')
 check "status endpoint reachable" "$([ -n "$STATUS_JSON" ] && echo 1 || echo 0)" "$STATUS_JSON"
-check "github action configured" "$([ "$CONFIGURED" = "true" ] && echo 1 || echo 0)" "configured=$CONFIGURED, token_length=$TOKLEN"
+check "github action configured" "$([ "$CONFIGURED" = "true" ] && echo 1 || echo 0)" "configured=$CONFIGURED"
 
 echo ""
 echo "=============================================================="

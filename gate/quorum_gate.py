@@ -54,6 +54,7 @@ from typing import Any, Optional
 
 from . import quorum_paths  # noqa: F401 - import first, for its sys.path side effects
 from .otel_tracing import stage_span
+from .redaction import scrub_pii
 
 import pipeline  # gate/pipeline.py - flat import, see quorum_paths.py
 from pipeline import PipelineAction, PipelineResult
@@ -328,12 +329,17 @@ def run_gate(
     audit = audit or AuditLogger(root=str(DEFAULT_AUDIT_ROOT))
     now = lambda: int(datetime.now(timezone.utc).timestamp())  # noqa: E731
     reasons: list[str] = []
+    # Cloud Trace is a real exported destination, outside this project's
+    # own storage - PII in a span attribute would leave the system
+    # entirely, not just sit in a database this code controls. Scrubbed
+    # once, reused across all three stages' spans.
+    traced_task = scrub_pii(proposal["task_description"][:200])
 
     # --- Stage A: Sentry, as a verifier of the agent's OWN output --------
     # Only the diff's added lines, plus the rationale in full - see
     # _added_lines()'s docstring for why scanning the whole diff false-
     # positives on exactly this project's own target repo.
-    with stage_span("gate.sentry", **{"quorum.task": proposal["task_description"][:200]}) as sentry_span:
+    with stage_span("gate.sentry", **{"quorum.task": traced_task}) as sentry_span:
         scanned_text = _added_lines(proposal["diff"]) + "\n" + proposal["rationale"]
         sentry_result: PipelineResult = pipeline.run_input_stage(scanned_text)
 
@@ -358,7 +364,7 @@ def run_gate(
     # --- Stage B: IntentGraph - always record the turn, win or lose -------
     # so a later reformulated resubmission of a rejected objective is
     # visible to re-entry detection even on this exact attempt's failure.
-    with stage_span("gate.intentgraph", **{"quorum.task": proposal["task_description"][:200]}) as intent_span:
+    with stage_span("gate.intentgraph", **{"quorum.task": traced_task}) as intent_span:
         node = intent_graph.add_turn(proposal["task_description"], timestamp=now())
         intent_risk = "LOW"
         risk_explanation = ""
@@ -387,7 +393,7 @@ def run_gate(
         )
 
     # --- Stage C: Reasoning Kernel - claim/provenance check ---------------
-    with stage_span("gate.kernel", **{"quorum.task": proposal["task_description"][:200]}) as kernel_span:
+    with stage_span("gate.kernel", **{"quorum.task": traced_task}) as kernel_span:
         claim_graph, agent_self_report = build_claim_graph(proposal)
         kernel_result = pipeline.record_review_board_outcome(
             PipelineResult(action=PipelineAction.PROCEED_WITH_LOG), [claim_graph]

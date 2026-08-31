@@ -23,6 +23,7 @@ from typing import Any, Optional
 import requests
 
 from gate.quorum_gate import GateResult, GateVerdict
+from gate.redaction import scrub_pii
 
 GITHUB_API = "https://api.github.com"
 
@@ -93,7 +94,15 @@ def open_pr_for_proposal(
         _run(["git", "-C", tmp, "-c", "user.name=quorum-gate",
               "-c", "user.email=quorum-gate@users.noreply.github.com",
               "add", "-A"], redact=token)
-        commit_title = f"Quorum auto-PR: {str(proposal.get('task_description', ''))[:72]}"
+        # Scrubbed (PII shapes) and defanged (@mentions) before it ever
+        # becomes a git commit message or PR body/title - both are
+        # public, permanent, and (for @mentions) can actually ping real
+        # GitHub users. Neither is caught by run_gate()'s Sentry scan,
+        # which only inspects diff/rationale as an in-memory proposal,
+        # not what this module builds from it afterward.
+        safe_task = _defang(scrub_pii(str(proposal.get("task_description", ""))))
+        safe_rationale = _defang(scrub_pii(str(proposal.get("rationale", ""))))
+        commit_title = f"Quorum auto-PR: {safe_task[:72]}"
         _run(["git", "-C", tmp, "-c", "user.name=quorum-gate",
               "-c", "user.email=quorum-gate@users.noreply.github.com",
               "commit", "-m", commit_title], redact=token)
@@ -103,10 +112,10 @@ def open_pr_for_proposal(
     pr_body = (
         "Opened automatically by Quorum's coordinator on a gate PASS verdict "
         "- not human-authored.\n\n"
-        f"**Task:**\n{proposal.get('task_description', '')}\n\n"
+        f"**Task:**\n{safe_task}\n\n"
         f"**Gate verdict:** {gate_result.verdict.value} "
         f"(reasons: {gate_result.reasons or 'none'})\n\n"
-        f"**Rationale:**\n{proposal.get('rationale', '')}"
+        f"**Rationale:**\n{safe_rationale}"
     )
     resp = requests.post(
         f"{GITHUB_API}/repos/{repo}/pulls",
@@ -124,6 +133,16 @@ def open_pr_for_proposal(
 
     pr = resp.json()
     return {"pr_url": pr["html_url"], "commit_sha": commit_sha, "branch": branch}
+
+
+def _defang(text: str) -> str:
+    """Breaks a literal @mention (`@someuser`) so it can't ping a real
+    GitHub user or team when this text lands in a PR title/body -
+    raw task/rationale text is caller-supplied (or agent-drafted from
+    caller-supplied text) and was never meant to be treated as trusted
+    GitHub-flavored markdown. A zero-width space after `@` keeps the
+    text visually identical while defeating GitHub's mention parser."""
+    return text.replace("@", "@​")
 
 
 def _redact(text: str, secret: Optional[str]) -> str:

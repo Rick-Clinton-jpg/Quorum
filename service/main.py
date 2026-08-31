@@ -33,6 +33,7 @@ from gate.firestore_audit import FirestoreAuditLogger
 from gate.firestore_intent import FirestoreIntentStore
 from gate.github_action import ActionError, open_pr_for_proposal
 from gate.quorum_gate import GateResult, GateVerdict, run_gate
+from gate.redaction import scrub_pii
 from worker_agent.orchestrator import WorkerAgentCallError
 
 app = FastAPI(title="Quorum Coordinator", version="0.1.0")
@@ -153,7 +154,9 @@ def health_check() -> dict[str, Any]:
     # than this app, not a bug here.
     #
     # github_action_configured is a boolean only - never the secret's
-    # actual value - added specifically to diagnose whether a
+    # actual value, or even its length (dropped: a length is still
+    # information about a secret an unauthenticated public endpoint has
+    # no reason to reveal) - added specifically to diagnose whether a
     # Secret-Manager-backed QUORUM_ACTION_GITHUB_TOKEN is actually
     # readable inside the running container, without needing to guess
     # from a PASS verdict's silently-null pr_url.
@@ -162,7 +165,6 @@ def health_check() -> dict[str, Any]:
     return {
         "status": "ok",
         "github_action_configured": bool(token) and bool(repo),
-        "github_token_length": len(token) if token else 0,
         "github_repo": repo or None,
         # Agent Identity (gate/agent_identity.py): whether POST /gate/run
         # and /gate/retry currently require a valid X-Quorum-Agent-Key
@@ -224,9 +226,9 @@ def execute_retry_gate(req: RetryGateRequest, agent_id: str = Depends(_require_a
         # limit, transient outage) - distinct from a bug in this project's
         # own code. 502, not 500, so a caller can tell "the model call
         # failed, retry" apart from "something here is actually broken."
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+        raise HTTPException(status_code=502, detail=scrub_pii(str(exc))) from exc
     except Exception as exc:  # noqa: BLE001 - surface as a 500 with the real cause, not a bare 500
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+        raise HTTPException(status_code=500, detail=scrub_pii(str(exc))) from exc
 
 
 @app.post("/gate/run", response_model=GateResponse)
@@ -251,7 +253,7 @@ def execute_run_gate(req: RunGateRequest, agent_id: str = Depends(_require_agent
             agent_id=agent_id,
         )
     except Exception as exc:  # noqa: BLE001
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+        raise HTTPException(status_code=500, detail=scrub_pii(str(exc))) from exc
 
 
 @app.get("/audit/trail")
@@ -260,11 +262,24 @@ def get_audit_trail(session: Optional[str] = None, tag: Optional[str] = None, li
     agent_id field AuditLogger.log() actually writes (see
     verifiers/warden/warden/audit.py) - it is not a Firestore-session
     identifier, despite the name; that's Warden's own field name, kept
-    as-is since this reuses Warden's real interface."""
+    as-is since this reuses Warden's real interface.
+
+    This endpoint is deliberately public/unauthenticated for judge
+    accessibility - which means the `objective` and `note` fields (free
+    text supplied by whoever called /gate/run or /gate/retry) are scrubbed
+    for PII shapes before being returned, on every record, regardless of
+    where it came from (real Firestore or local fallback)."""
+    limit = max(1, min(limit, 500))
     try:
-        return {"records": _AUDIT.read(session=session, tag=tag, limit=limit)}
+        records = _AUDIT.read(session=session, tag=tag, limit=limit)
+        for record in records:
+            if "objective" in record:
+                record["objective"] = scrub_pii(record["objective"])
+            if "note" in record:
+                record["note"] = scrub_pii(record["note"])
+        return {"records": records}
     except Exception as exc:  # noqa: BLE001
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+        raise HTTPException(status_code=500, detail=scrub_pii(str(exc))) from exc
 
 
 if __name__ == "__main__":

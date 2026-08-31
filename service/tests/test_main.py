@@ -45,6 +45,27 @@ def test_status_reports_agent_auth_enforced(monkeypatch):
     assert client.get("/status").json()["agent_auth_enforced"] is True
 
 
+def test_status_never_reports_token_length():
+    """A length is still information about a secret an unauthenticated
+    public endpoint has no reason to reveal - dropped entirely, not just
+    the value."""
+    assert "github_token_length" not in client.get("/status").json()
+
+
+def test_audit_trail_scrubs_pii_from_objective_field(monkeypatch, reject_demo_request):
+    monkeypatch.delenv("QUORUM_AGENT_KEYS", raising=False)
+    body = dict(reject_demo_request, session_id="pii-audit-scrub-test")
+    body["proposal"] = dict(
+        body["proposal"], task_description="Contact jane.doe@example.com re: this diagnosis-pii-scrub probe"
+    )
+    client.post("/gate/run", json=body)
+
+    trail = client.get("/audit/trail", params={"limit": 500}).json()
+    matching = [r for r in trail["records"] if "diagnosis-pii-scrub" in r.get("objective", "")]
+    assert matching, "expected at least one record from this probe"
+    assert all("jane.doe@example.com" not in r["objective"] for r in matching)
+
+
 def test_gate_run_open_when_auth_not_configured(monkeypatch, reject_demo_request):
     monkeypatch.delenv("QUORUM_AGENT_KEYS", raising=False)
     resp = client.post("/gate/run", json=reject_demo_request)
