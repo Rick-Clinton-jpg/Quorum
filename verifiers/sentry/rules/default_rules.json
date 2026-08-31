@@ -58,5 +58,11 @@
     "pattern": "(?i)\\b(ignore|disregard|forget)\\s+(all\\s+|the\\s+)?(above|prior|previous)(\\s+instructions)?\\b",
     "severity": "HIGH",
     "description": "Plain, unobfuscated prompt-injection trigger phrase (e.g. \"ignore previous instructions\") — no comment-hiding, Unicode tricks, or addressing language needed to catch this class, so it should never depend on those other rules firing instead"
+  },
+  {
+    "name": "whitespace_steganography_pattern",
+    "pattern": "(?i)(?m)\\S[ \\t]{4,}\\r?$",
+    "severity": "HIGH",
+    "description": "Trailing whitespace sequence at the end of non-empty lines, representing a potential steganographic exfiltration channel"
   }
 ]
