@@ -45,6 +45,15 @@ Live on Cloud Run: `https://quorum-coordinator-497954606552.us-central1.run.app`
   applied and tested in a throwaway temp copy of the target repo
   (`worker_agent/self_check.py`) — the real vendored `verifiers/sentry/`
   tree is never touched by anything the agent drafts.
+- **The local Firestore fallback had a real lost-update race**: two
+  requests for the same `session_id`, only reachable when Firestore is
+  down, could race on `FirestoreIntentStore`'s load→mutate→save
+  sequence and silently drop one update. `session_lock()`
+  (`gate/firestore_intent.py`) closes it with a per-session lock held
+  across the whole sequence, not just around the save — tested by
+  reproducing the race deterministically with a `threading.Barrier`,
+  then confirming the lock actually prevents it
+  (`gate/tests/test_firestore_intent.py`).
 
 Built for the All Things Agentic Hackathon, The Taskmaster track.
 

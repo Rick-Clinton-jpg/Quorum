@@ -32,7 +32,9 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Any, Optional
+import threading
+from contextlib import contextmanager
+from typing import Any, Iterator, Optional
 
 import numpy as np
 
@@ -124,6 +126,21 @@ class FirestoreIntentStore:
         self.db = None
         self._local_sessions: dict[str, dict[str, Any]] = {}
 
+        # The real race isn't inside this class - it's the load -> mutate
+        # -> save sequence that spans a whole request in service/main.py:
+        # load_session() returns a graph, gate/quorum_gate.py mutates it
+        # in place (add_turn()), then save_session() overwrites whatever
+        # was there. Two requests racing on the SAME session_id (only
+        # reachable when Firestore is down, since real Firestore
+        # document writes don't have this problem) can lose one's
+        # update. A lock on save_session() alone can't fix that - the
+        # stale read already happened by then. session_lock() below is
+        # what a caller holds across the whole load-to-save sequence;
+        # _locks_guard only protects creating a new per-session lock,
+        # not the sessions themselves.
+        self._locks: dict[str, threading.Lock] = {}
+        self._locks_guard = threading.Lock()
+
         if FIRESTORE_AVAILABLE:
             try:
                 self.db = firestore.Client(project=self.project)
@@ -156,3 +173,18 @@ class FirestoreIntentStore:
                 logger.error("Failed to save session %r to Firestore (%s) - using local fallback.", session_id, exc)
 
         self._local_sessions[session_id] = data
+
+    @contextmanager
+    def session_lock(self, session_id: str) -> Iterator[None]:
+        """Held by the caller across a whole load_session() ->
+        (mutate the graph) -> save_session() sequence, not just around
+        save_session() itself - that's the only way to actually close
+        the lost-update race described above, not just narrow it.
+        Real Firestore document writes don't need this (Firestore
+        handles that); this only matters for the local-fallback path,
+        but costs nothing to hold either way - see service/main.py's
+        two gate endpoints for the actual call site."""
+        with self._locks_guard:
+            lock = self._locks.setdefault(session_id, threading.Lock())
+        with lock:
+            yield

@@ -188,17 +188,24 @@ def execute_retry_gate(req: RetryGateRequest, agent_id: str = Depends(_require_a
     from gate.quorum_gate import retry_gate  # deferred: same reason quorum_gate.py itself defers this import
 
     try:
-        intent_graph = _INTENT_STORE.load_session(req.session_id)
+        # Held across the whole load -> mutate -> save sequence, not just
+        # around save_session() - see gate/firestore_intent.py's
+        # session_lock() docstring for why that's the only way to
+        # actually close the local-fallback lost-update race, not just
+        # narrow it. _maybe_open_pr() below doesn't touch intent_graph
+        # state, so it's deliberately outside the lock.
+        with _INTENT_STORE.session_lock(req.session_id):
+            intent_graph = _INTENT_STORE.load_session(req.session_id)
 
-        proposal, gate_result, history = retry_gate(
-            task_description=req.task_description,
-            max_gate_attempts=req.max_gate_attempts,
-            intent_graph=intent_graph,
-            audit=_AUDIT,
-            agent_id=agent_id,
-        )
+            proposal, gate_result, history = retry_gate(
+                task_description=req.task_description,
+                max_gate_attempts=req.max_gate_attempts,
+                intent_graph=intent_graph,
+                audit=_AUDIT,
+                agent_id=agent_id,
+            )
 
-        _INTENT_STORE.save_session(req.session_id, intent_graph)
+            _INTENT_STORE.save_session(req.session_id, intent_graph)
 
         pr_url, action_error = _maybe_open_pr(proposal, gate_result)
 
@@ -229,11 +236,12 @@ def execute_run_gate(req: RunGateRequest, agent_id: str = Depends(_require_agent
     proposal (e.g. the fixture in gate/tests/fixtures/) against a real
     session's IntentGraph state, without spending a Gemini call."""
     try:
-        intent_graph = _INTENT_STORE.load_session(req.session_id)
+        with _INTENT_STORE.session_lock(req.session_id):
+            intent_graph = _INTENT_STORE.load_session(req.session_id)
 
-        gate_result = run_gate(req.proposal, intent_graph=intent_graph, audit=_AUDIT, agent_id=agent_id)
+            gate_result = run_gate(req.proposal, intent_graph=intent_graph, audit=_AUDIT, agent_id=agent_id)
 
-        _INTENT_STORE.save_session(req.session_id, intent_graph)
+            _INTENT_STORE.save_session(req.session_id, intent_graph)
 
         return GateResponse(
             session_id=req.session_id,

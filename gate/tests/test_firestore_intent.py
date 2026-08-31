@@ -12,6 +12,7 @@ actually produces.
 
 from __future__ import annotations
 
+import threading
 from unittest.mock import MagicMock, patch
 
 from gate.firestore_intent import (
@@ -136,3 +137,59 @@ def test_store_falls_back_to_local_on_live_firestore_failure():
 
     reloaded = store.load_session("sess-3")
     assert reloaded.nodes[0].description == "still works despite the outage"
+
+
+def test_concurrent_saves_without_the_lock_can_lose_an_update():
+    """Demonstrates the real bug session_lock() closes: two threads
+    racing load_session -> mutate -> save_session on the SAME session_id,
+    without holding the lock, can silently lose one thread's update - no
+    exception, the data is just gone. A threading.Barrier forces both
+    threads to load before either saves, so this reproduces the race
+    deterministically instead of relying on timing luck."""
+    store = FirestoreIntentStore()
+    store.db = None  # force local (in-memory dict) fallback
+    session_id = "race-unlocked"
+    store.save_session(session_id, IntentGraph())  # seed an empty session
+
+    barrier = threading.Barrier(2)
+
+    def worker(label: str) -> None:
+        graph = store.load_session(session_id)
+        barrier.wait()  # guarantee both threads load before either saves
+        graph.add_turn(f"turn from {label}", timestamp=0)
+        store.save_session(session_id, graph)
+
+    threads = [threading.Thread(target=worker, args=(label,)) for label in ("A", "B")]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    final = store.load_session(session_id)
+    assert len(final.nodes) == 1, "expected the race to lose one update - if this fails, the race isn't reproducing"
+
+
+def test_session_lock_prevents_the_update_loss():
+    """Same two-thread race as above, but each thread holds
+    session_lock() across its whole load -> mutate -> save sequence -
+    the fix actually being tested. Both updates must survive."""
+    store = FirestoreIntentStore()
+    store.db = None
+    session_id = "race-locked"
+    store.save_session(session_id, IntentGraph())
+
+    def worker(label: str) -> None:
+        with store.session_lock(session_id):
+            graph = store.load_session(session_id)
+            graph.add_turn(f"turn from {label}", timestamp=0)
+            store.save_session(session_id, graph)
+
+    threads = [threading.Thread(target=worker, args=(label,)) for label in ("A", "B")]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    final = store.load_session(session_id)
+    assert len(final.nodes) == 2, "both updates should survive when session_lock() is held"
+    assert {n.description for n in final.nodes} == {"turn from A", "turn from B"}
