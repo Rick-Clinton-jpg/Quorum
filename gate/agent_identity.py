@@ -6,7 +6,7 @@ which agent, human, or script actually called the service - was logged
 under one hardcoded agent_id ("quorum-worker-agent"). That made the
 audit trail useless for answering "which caller did this" once more than
 one caller exists, which defeats the point of an append-only audit log
-for a Fortified Enterprise Fleet.
+in any deployment with more than one real caller.
 
 Keys are configured via the QUORUM_AGENT_KEYS env var, a JSON object
 mapping API key -> agent_id, e.g.:

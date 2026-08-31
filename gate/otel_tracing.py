@@ -1,9 +1,9 @@
 """OpenTelemetry tracing for the gate's own stages - new, Quorum-owned
 code, layered alongside Warden's existing audit log, never replacing it.
 
-Closes a specific, named gap: the Fortified Enterprise Fleet rubric asks
-for "Agent Observability (OpenTelemetry-compliant audit logs and
-end-to-end reasoning chain traces)". Warden's own audit trail
+Closes a real observability gap: production agent systems need
+end-to-end reasoning-chain traces, not just a log line. Warden's own
+audit trail
 (gate/quorum_gate.py's audit.log() calls) already IS a real reasoning-
 chain record - one entry per Sentry/IntentGraph/Kernel stage, win or
 lose - it just isn't OTel-formatted. This module exports that same

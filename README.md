@@ -28,7 +28,7 @@ PASS / REJECT / ESCALATE
 
 Live on Cloud Run: `https://quorum-coordinator-497954606552.us-central1.run.app`
 
-Built for the All Things Agentic Hackathon, Fortified Enterprise Fleet track.
+Built for the All Things Agentic Hackathon, The Taskmaster track.
 
 ## Repository layout
 
@@ -106,11 +106,21 @@ See [LICENSE](./LICENSE) for full terms, or reach out to discuss
 commercial licensing. This covers Quorum's own original code (the
 Worker Agent orchestration and service layer).
 
-Quorum vendors six independently-developed components, each under its
-own PolyForm Noncommercial 1.0.0 terms: Trust Boundary (`gate/`), the
-orchestration layer that runs the pipeline; three deterministic
-verifiers that judge every patch — Sentry, Reasoning Kernel, and
-IntentGraph (`verifiers/intent_graph/`, from the `intent-layer` repo);
-Warden, which records the audit trail; and Review-Board, a human-gated
-review step rather than an automated one. See `docs/INTEGRATION_MAP.md`
-for what each one actually does and doesn't do.
+Quorum vendors six components, each under its own PolyForm Noncommercial
+1.0.0 terms: Trust Boundary (`gate/`), the orchestration layer that runs
+the pipeline; three deterministic verifiers that judge every patch —
+Sentry, Reasoning Kernel, and IntentGraph (`verifiers/intent_graph/`,
+from the `intent-layer` repo); Warden, which records the audit trail;
+and Review-Board, a human-gated review step rather than an automated
+one. All six were built within this same contest's Submission Period
+(Aug 3–31, 2026) — the oldest, reasoning-kernel, on Aug 6 — as separate
+repos before being consolidated into Quorum on Aug 18; none of this
+predates the hackathon. Two were substantively modified for Quorum, not
+just vendored as-is: Sentry's ruleset gained three new detection rules
+(`prior_approval_claim`, `pii_exposure_pattern`, `rule_disablement_request`)
+written specifically for gaps this project's own adversarial testing
+found, and IntentGraph's `extractor.py` had its embedding-backend logic
+rewritten after `sentence-transformers` failed to load in the deployed
+environment. `gate/`, Warden, and Review-Board are used unmodified — all
+coordination happens from `gate/quorum_gate.py` calling into them. See
+`docs/INTEGRATION_MAP.md` for what each one actually does and doesn't do.
