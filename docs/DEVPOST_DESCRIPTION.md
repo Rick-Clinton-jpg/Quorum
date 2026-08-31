@@ -6,7 +6,7 @@ Copy each section into the matching Devpost field.
 
 ## Features and functionality
 
-**The chore this solves is personal, not hypothetical.** Building with autonomous coding agents day to day means constantly deciding whether to trust a patch you didn't write enough to let it ship unsupervised — reviewing everything yourself defeats the point of delegating, and reviewing nothing is how a bad patch reaches production. Quorum is the agent that does that specific, messy chore end to end: it takes a task, drafts a real patch, and only lets the patch ship once it's proven safe — no human touch on the happy path.
+**The chore this solves is personal, not hypothetical.** Building with autonomous coding agents day to day means constantly deciding whether to trust a patch you didn't write enough to let it ship unsupervised — reviewing everything yourself defeats the point of delegating, and reviewing nothing is how a bad patch reaches production. Quorum is the agent that does that specific, messy chore end to end: it takes a task, drafts a real patch, and only lets the patch ship once it clears three independent checks — no human touch on the happy path.
 
 A Worker Agent (Gemini 3.5 via Google's Agent Development Kit, running on Vertex AI) reads the task, drafts a small code patch, writes a rationale, lists the factual claims that rationale depends on, and self-checks its own work by actually running the target repository's test suite against the patch in a throwaway copy.
 
@@ -14,7 +14,7 @@ That proposal then has to clear three independent, deterministic verifiers befor
 
 - **Sentry** scans the agent's own diff and rationale for injected or manipulative content — not the target code, the agent's own output.
 - **IntentGraph** checks whether the current task is a reformulated return to an objective the gate already rejected.
-- **The Reasoning Kernel** independently re-verifies every claim's provenance — it re-reads the cited source itself and only marks a claim VERIFIED if the content actually backs it up, never trusting the agent's self-report.
+- **The gate re-checks every claim's provenance itself** — it re-reads the cited source and only marks a claim VERIFIED when the statement quotes exact text found verbatim at a specific line there, never trusting the agent's self-report; that confirms quoted evidence exists at the cited source location, not that the surrounding assertion is true. The Reasoning Kernel then separately checks the resulting claim graph's logical structure (contradictions, unsupported conclusions) — a distinct, later stage from this lexical check.
 
 Every stage writes to an append-only audit trail, win or lose, now exported as real OpenTelemetry spans to Google Cloud Trace alongside the existing JSON log. The gate returns one of three verdicts:
 
