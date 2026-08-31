@@ -137,9 +137,14 @@ def _run(cmd: list[str]) -> str:
     # already-computed PASS verdict, instead of degrading to
     # action_error the way a real ActionError does.
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
     except OSError as exc:
         raise ActionError(f"could not run command: {' '.join(cmd)}\n{exc}") from exc
+    except subprocess.TimeoutExpired as exc:
+        # Previously unbounded: a stalled network mid-clone/push would
+        # hang the request indefinitely instead of failing cleanly, same
+        # failure shape the OSError case above was already fixed for.
+        raise ActionError(f"command timed out after 60s: {' '.join(cmd)}") from exc
     if result.returncode != 0:
         raise ActionError(f"command failed: {' '.join(cmd)}\n{result.stderr}")
     return result.stdout

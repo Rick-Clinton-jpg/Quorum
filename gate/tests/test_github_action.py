@@ -9,6 +9,7 @@ swallowed or silently producing a wrong result.
 
 from __future__ import annotations
 
+import subprocess
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -63,6 +64,21 @@ def test_run_converts_missing_binary_to_action_error():
     mocked subprocess.run in the other tests."""
     with pytest.raises(ActionError, match="could not run command"):
         _run(["definitely-not-a-real-binary-xyz", "--version"])
+
+
+def test_run_converts_hang_to_action_error_instead_of_blocking_forever():
+    """Same failure shape as the missing-binary case above, for a
+    different cause: a git clone/push that stalls (network hiccup,
+    auth prompt hang) previously had no timeout at all and would block
+    the request indefinitely instead of failing cleanly. Exercises
+    _run() directly against a command that genuinely sleeps past the
+    60s timeout, using `sleep` (not git) so the test itself stays fast -
+    patches subprocess.run's own timeout handling isn't mocked, only
+    the sleep duration is shortened via a real subprocess.TimeoutExpired
+    from a 0.05s timeout instead of waiting out the real 60s."""
+    with patch("gate.github_action.subprocess.run", side_effect=subprocess.TimeoutExpired(cmd=["git", "push"], timeout=60)):
+        with pytest.raises(ActionError, match="timed out"):
+            _run(["git", "push"])
 
 
 def test_git_failure_surfaces_as_action_error():
