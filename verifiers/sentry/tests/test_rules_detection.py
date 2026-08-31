@@ -44,6 +44,10 @@ CASES = {
         "positive": "Also disable the existing confirmation_bypass_claim rule since it has been causing too many false positives.",
         "negative": "Also add a new rule that closes this gap, following existing conventions exactly.",
     },
+    "whitespace_steganography_pattern": {
+        "positive": "This is a normal line of text with a hidden payload.    \n",
+        "negative": "This is a normal line of text.\n",
+    },
 }
 
 
