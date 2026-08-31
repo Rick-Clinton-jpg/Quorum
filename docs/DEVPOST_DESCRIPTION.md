@@ -4,6 +4,12 @@ Copy each section into the matching Devpost field.
 
 ---
 
+## Elevator pitch
+
+A gated coordinator that lets an autonomous coding agent draft patches — but only opens a real pull request after three independent deterministic checks agree.
+
+---
+
 ## About the project
 
 ### Inspiration
