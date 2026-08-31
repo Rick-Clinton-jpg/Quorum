@@ -138,6 +138,10 @@ class GateResult:
     kernel_verdict: Optional[dict] = None
     intent_risk: Optional[str] = None
     agent_self_report: list[dict] = field(default_factory=list)
+    # The intent_graph node id this call marked safety_boundary=True on, if
+    # any - lets a caller (retry_gate()) track which boundary nodes are its
+    # OWN doing across attempts, for own_boundary_node_ids above.
+    boundary_node_id: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------
@@ -204,27 +208,42 @@ def _resolve_claim_source_path(source: str) -> Optional[Path]:
 # this function never returns "REFUTED" (that verdict, when it happens,
 # comes from the separately vendored Reasoning Kernel, not from here) -
 # a false hit here only downgrades a possibly-genuine VERIFIED to
-# REPORTED, never the reverse. Confirmed as a real gap without this: a
-# claim's overlapping words with its source could reach the ratio
-# threshold below even when the statement asserts the opposite of what
-# the source actually says (the source negates the shared terms, the
-# statement doesn't, or vice versa) - "unsupported claims marked
-# VERIFIED via lexical overlap alone."
+# REPORTED, never the reverse.
+#
+# An earlier version of this check tried to compare the claim's negation
+# status against the negation status of "source lines containing any of
+# the claim's own distinctive terms". Confirmed broken by independent
+# re-audit: on a large prose file (this one - gate/quorum_gate.py is a
+# claim's own valid source), "lines sharing >=1 term" is nearly the whole
+# file once the claim's terms include anything generic (module names,
+# common domain words like "kernel"), and a 700-line file with lots of
+# docstrings almost always has SOME unrelated negation word in that
+# blob - so the comparison degenerated into "does this big file contain
+# the word 'not' anywhere", which is trivially true, and a genuinely
+# false negative claim (e.g. "Reasoning Kernel is never invoked by the
+# gate", against a file that in fact invokes it) still came back
+# VERIFIED. Tightening the line-scoping heuristic (requiring 2+ shared
+# terms per line, etc.) was tried and still exploitable the same way:
+# any topic discussed in prose repeatedly is topic-adjacent to *some*
+# unrelated negation somewhere in the file.
+#
+# Rather than chase a better lexical negation-scoping heuristic (a false
+# claim only needs ONE unrelated nearby "not" to hide behind), a negated
+# claim now skips lexical verification entirely and is always REPORTED -
+# "the source contains these words" was never good evidence for a
+# negative assertion in the first place; confirming a real negative
+# claim is exactly the Reasoning Kernel's job (semantic, not lexical),
+# not this fallback's. This does give up the narrower reverse case (a
+# POSITIVELY-phrased false claim whose source specifically negates it,
+# with no negation word in the claim itself) - undetected here the same
+# way it always was before this file had any negation handling, and
+# still the Kernel's job to catch, not a regression this change causes.
 _NEGATION_WORDS = {"not", "never", "cannot", "can't", "won't", "isn't", "doesn't", "wasn't", "aren't", "no longer"}
 
 
 def _has_negation(text: str) -> bool:
     lowered = text.lower()
     return any(w in lowered for w in _NEGATION_WORDS)
-
-
-def _source_lines_with_any_term(words: set[str], content: str) -> str:
-    """Only the lines of `content` containing at least one of the
-    claim's own distinctive terms - scopes the negation check to where
-    the claim's actual evidence is, not the whole file, which would
-    almost always contain SOME negation word unrelated to this specific
-    claim."""
-    return "\n".join(line for line in content.splitlines() if any(w in line.lower() for w in words))
 
 
 def determine_claim_origin(claim: dict) -> tuple[str, str]:
@@ -241,6 +260,14 @@ def determine_claim_origin(claim: dict) -> tuple[str, str]:
 
     content = path.read_text(errors="ignore")
 
+    # A negated statement ("X is never invoked", "the rule does NOT match
+    # Y") can't be confirmed by lexical presence at all - the words or
+    # quoted span being IN the file says nothing about whether the file
+    # negates them. See _NEGATION_WORDS' docstring for why this is a flat
+    # skip rather than a source-side negation comparison.
+    if _has_negation(claim["statement"]):
+        return "REPORTED", "statement contains a negation - lexical presence in the source can't confirm a negative claim"
+
     quoted = _QUOTE_RE.findall(claim["statement"])
     if quoted:
         if all(q in content for q in quoted):
@@ -254,13 +281,6 @@ def determine_claim_origin(claim: dict) -> tuple[str, str]:
     hits = sum(1 for w in words if w in hay)
     ratio = hits / len(words)
     if ratio >= _CONTENT_OVERLAP_THRESHOLD:
-        relevant_source = _source_lines_with_any_term(words, content)
-        if _has_negation(claim["statement"]) != _has_negation(relevant_source):
-            return (
-                "REPORTED",
-                f"{hits}/{len(words)} distinctive terms matched {path.name}, but the statement's negation "
-                "doesn't match the source lines containing those terms - not confirmed as written",
-            )
         return "VERIFIED", f"{hits}/{len(words)} distinctive statement terms found in {path.name}"
     return "REPORTED", f"only {hits}/{len(words)} distinctive statement terms found in {path.name} - not enough to confirm"
 
@@ -371,7 +391,7 @@ def run_gate(
     intent_graph: IntentGraph,
     audit: Optional[AuditLogger] = None,
     agent_id: str = "quorum-worker-agent",
-    is_internal_redraft: bool = False,
+    own_boundary_node_ids: frozenset[str] = frozenset(),
 ) -> GateResult:
     """Runs one Proposal through Sentry, IntentGraph, and the Reasoning
     Kernel, logging every stage via Warden, and returns a verdict.
@@ -383,16 +403,28 @@ def run_gate(
     in the Phase 3 report for why that's a Phase 4 (Firestore) concern,
     not something bolted on here.
 
-    `is_internal_redraft`: True only for retry_gate()'s own automated
-    redraft attempts (attempt > 1 within one retry_gate() call), never
-    for a genuinely new, separate call. A redraft's task_description
+    `own_boundary_node_ids`: the safety-boundary node id(s) THIS SAME
+    retry_gate() call's own prior attempt(s) created - empty for a
+    genuinely new, separate call. A redraft's task_description
     deliberately restates the prior REJECT's reasons ("A previous
     attempt was REJECTED for: ... Address this specifically in your
     redraft") - IntentGraph can legitimately score that as similar to
     the safety-boundary node retry_gate()'s own prior attempt just
     added, and flag HIGH re-entry risk against the system's own honest
     recovery attempt, not an external adversary reformulating a
-    rejected idea. When True, the turn is still added to intent_graph
+    rejected idea.
+
+    Confirmed as a real gap by independent re-audit: an earlier version
+    took a plain `is_internal_redraft: bool` and, when True, ignored ANY
+    HIGH score outright - including one driven by a completely different,
+    older safety-boundary node from earlier in the same session, unrelated
+    to this retry sequence. Passing the exact node id(s) instead, and
+    checking below whether EVERY boundary node in this turn's lineage is
+    one of "my own", means an older unrelated boundary still forces
+    ESCALATE even on a redraft attempt - only a HIGH driven purely by this
+    call's own just-created boundary is exempted.
+
+    When exempted, the turn is still added to intent_graph
     (still visible to a FUTURE, separate call's re-entry check - Stage
     B's whole point) and Sentry/Kernel still fully gate the redraft's
     actual new content, but a HIGH IntentGraph score alone won't force
@@ -467,6 +499,7 @@ def run_gate(
             reasons=reasons,
             sentry_action=sentry_result.action.value,
             intent_risk=intent_risk,
+            boundary_node_id=node.intent_id if node is not None else None,
         )
 
     # --- Stage C: Reasoning Kernel - claim/provenance check ---------------
@@ -490,12 +523,21 @@ def run_gate(
         )
 
     # Recorded either way (audit.log() above already ran), but a HIGH
-    # score from retry_gate()'s own internal redraft attempt doesn't
-    # force ESCALATE by itself - see is_internal_redraft's docstring.
+    # score driven ENTIRELY by this same retry_gate() call's own prior
+    # boundary doesn't force ESCALATE by itself - see
+    # own_boundary_node_ids' docstring. A HIGH driven even partly by any
+    # OTHER (older/unrelated) boundary in this turn's lineage still
+    # escalates normally - own_boundary_node_ids only ever narrows the
+    # exemption, never widens it beyond nodes this exact call created.
     # Falls through to the kernel-verdict checks below either way, since
     # this isn't a mutually-exclusive "instead of," just "not blocking
     # for this specific reason."
-    if intent_risk == "HIGH" and not is_internal_redraft:
+    if intent_risk == "HIGH":
+        lineage_boundaries = {b.intent_id for b in intent_graph.lineage_boundary_nodes(node)} if node is not None else set()
+        exempt = bool(lineage_boundaries) and lineage_boundaries <= own_boundary_node_ids
+    else:
+        exempt = False
+    if intent_risk == "HIGH" and not exempt:
         reasons.append(f"IntentGraph flagged HIGH re-entry risk: {risk_explanation}")
         gate_verdict = GateVerdict.ESCALATE
     elif kernel_verdict_value in _ESCALATE_KERNEL_VERDICTS:
@@ -521,8 +563,10 @@ def run_gate(
     else:
         gate_verdict = GateVerdict.PASS
 
+    boundary_node_id: Optional[str] = None
     if gate_verdict == GateVerdict.REJECT:
         intent_graph.add_turn("[SAFETY BOUNDARY TRIGGERED]", timestamp=now())
+        boundary_node_id = node.intent_id if node is not None else None
     elif gate_verdict == GateVerdict.ESCALATE:
         # Matches Trust Boundary's own architecture exactly: Review-Board
         # has zero programmatic API (docs/INTEGRATION_MAP.md Section 4) -
@@ -539,6 +583,7 @@ def run_gate(
         kernel_verdict=kernel_verdict,
         intent_risk=intent_risk,
         agent_self_report=agent_self_report,
+        boundary_node_id=boundary_node_id,
     )
 
 
@@ -634,6 +679,22 @@ def retry_gate(
             )
 
     if preflight_result.action == PipelineAction.REJECT:
+        # Confirmed as a real gap by independent re-audit: a bare
+        # "[SAFETY BOUNDARY TRIGGERED]" add_turn() is a marker-only call
+        # (see graph.py's is_boundary_marker) - it never creates a node
+        # of its own, it retroactively flags whatever node is CURRENTLY
+        # last in the graph. Calling it here, with no real node for the
+        # just-rejected task_description ever added first, meant: in a
+        # fresh session (no prior nodes) the call was a silent no-op -
+        # the rejected objective was never recorded at all; in a session
+        # with prior history, it wrongly flagged the PRECEDING legitimate
+        # turn as the safety boundary instead. Adding the real (PII-
+        # scrubbed - this content was rejected for possibly containing
+        # exactly that) task_description as its own node FIRST, then the
+        # marker, mirrors run_gate()'s own Stage B + REJECT sequence
+        # (this file, above) and makes the marker flag the node it's
+        # actually meant to.
+        intent_graph.add_turn(scrub_pii(task_description), timestamp=now())
         intent_graph.add_turn("[SAFETY BOUNDARY TRIGGERED]", timestamp=now())
         return (
             {},
@@ -650,6 +711,11 @@ def retry_gate(
     proposal: dict = {}
     gate_result: Optional[GateResult] = None
     deadline = time.monotonic() + RETRY_GATE_OUTER_DEADLINE_SECONDS
+    # Node ids of safety-boundary turns THIS retry_gate() call has itself
+    # created so far - see run_gate()'s own_boundary_node_ids docstring.
+    # Grows by one each time an attempt REJECTs; never includes a
+    # boundary node from outside this call.
+    own_boundary_node_ids: set[str] = set()
 
     for attempt in range(1, max_gate_attempts + 1):
         # Guards starting a NEW attempt only - attempt 1 always runs
@@ -678,12 +744,14 @@ def retry_gate(
             intent_graph=intent_graph,
             audit=audit,
             agent_id=agent_id,
-            # See run_gate()'s is_internal_redraft docstring: only True
-            # for attempt > 1, and only because THIS SAME retry_gate()
-            # call's own prior REJECT put a boundary node in the graph -
-            # never true for a caller's first attempt, which is exactly
-            # as scrutinized by IntentGraph as it always was.
-            is_internal_redraft=(attempt > 1),
+            # See run_gate()'s own_boundary_node_ids docstring: only the
+            # boundary node(s) THIS retry_gate() call's own prior
+            # attempt(s) created - empty on a caller's first attempt,
+            # which is exactly as scrutinized by IntentGraph as it
+            # always was. An older, unrelated boundary from earlier in
+            # the session is never in this set, so it still escalates
+            # normally even on a redraft.
+            own_boundary_node_ids=frozenset(own_boundary_node_ids),
         )
         history.append(
             {
@@ -692,6 +760,8 @@ def retry_gate(
                 "reasons": gate_result.reasons,
             }
         )
+        if gate_result.boundary_node_id is not None:
+            own_boundary_node_ids.add(gate_result.boundary_node_id)
 
         if persist_intent_graph is not None:
             persist_intent_graph()

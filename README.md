@@ -170,6 +170,39 @@ Example pull requests opened autonomously by the deployed service on a
   broader use.
 - Cloud Run's cold-start cost hasn't been fully root-caused — one real
   contributor was found and fixed; that doesn't explain all of it.
+- **Firestore's cross-instance lock is still open.** `gate/firestore_intent.py`'s
+  `session_lock()` is a `threading.Lock()` — it fully closes the
+  load-mutate-save race between two requests on the same Cloud Run
+  *instance*, but not between two different *instances* (the real
+  Firestore write is a plain `.set()`, not a compare-and-swap). Under
+  that race, `merge_intent_graphs()` no longer silently discards a
+  genuinely divergent node on the next reconciling load — it keeps
+  both under a fresh id — but the underlying race itself needs a
+  Firestore transaction wrapping the whole load-mutate-save cycle to
+  actually close, which is not yet implemented.
+- **Sentry is pattern-based defense in depth, not comprehensive
+  injection/PII protection.** Independently re-audited: a plain,
+  unobfuscated "ignore previous instructions" is now caught
+  (`injection_trigger_phrase`, added after that audit), but zero-width
+  character splitting, Unicode homoglyph substitution, phone numbers,
+  API-key-shaped secrets, and Markdown-image exfiltration
+  (`gate/tests/fixtures/markdown_exfil_proposal.json` is this project's
+  own worked example of that exact gap) all still pass Sentry's rules
+  with zero findings. Markdown-exfil detection specifically couldn't be
+  added directly to the live ruleset without breaking that same fixture
+  self-referentially (a rule's own positive test-case example text, in
+  the diff that adds it, trips the rule it's demonstrating) — closing
+  it properly needs Sentry to treat a diff's own test/example content
+  differently from its detection logic, not just one more regex.
+- Claim verification (`determine_claim_origin`) is lexical-overlap
+  based, not semantic. A negated claim (containing "not"/"never"/etc.)
+  now always falls back to REPORTED rather than being confirmable by
+  keyword presence — cheap to fool otherwise, since a large source file
+  discussing the claim's subject in prose will often contain *some*
+  unrelated negation somewhere. A positively-phrased false claim, whose
+  cited source specifically negates it, is still not caught here — that
+  class of check is the Reasoning Kernel's job (semantic), not this
+  fallback's (lexical).
 
 See `docs/INTEGRATION_MAP.md` for the full, disclosed limitations of
 every vendored verifier.

@@ -123,27 +123,82 @@ def merge_intent_graphs(primary: IntentGraph, fallback: IntentGraph) -> IntentGr
     turn this process recorded locally during the outage.
 
     Nodes are append-only and never mutated after creation (see
-    graph.py's add_turn()), so a shared intent_id is assumed to be the
-    same node - `primary` wins on an id collision, arbitrarily but
-    harmlessly, since the two are expected to be identical in that
-    case. `_next_id` is set to the max of both inputs, so ids minted
-    after the merge can't collide with either source's ids."""
-    by_id: dict[str, IntentNode] = {}
-    for n in [*fallback.nodes, *primary.nodes]:  # primary added last -> wins on id collision
-        by_id[n.intent_id] = n
+    graph.py's add_turn()), so a shared intent_id USUALLY is the same
+    node, and the common case just dedupes it. Confirmed as a real gap
+    by independent re-audit: the previous version assumed that was
+    ALWAYS true and let `primary` silently win on any id collision - but
+    session_lock() only protects one process's own load-mutate-save
+    sequence (see its docstring and firestore_intent.py's IntentStore
+    docstring), not two DIFFERENT processes/Cloud Run instances racing
+    on the same session_id with a plain Firestore .set() in between (a
+    blind overwrite, not a compare-and-swap - see save_session()). Under
+    that race, `primary` and `fallback` can mint the SAME id for two
+    ACTUALLY DIFFERENT turns, and silently keeping only `primary` would
+    quietly discard a real, distinct turn - including, worst case, a
+    safety-boundary one. When a collision's content genuinely differs
+    (not just an identical duplicate), the fallback node is kept too,
+    under a freshly minted id, rather than dropped - and every OTHER
+    fallback node's own parent_intent/lineage_root/edges are remapped
+    through the same rename so the fallback's internal lineage chain
+    stays consistent after the rename. (This doesn't make the
+    underlying race impossible - the real fix is process-external
+    coordination, e.g. a Firestore transaction around the whole
+    load-mutate-save cycle, still open work - it only makes this merge
+    step stop being the place a real turn quietly vanishes.)"""
+    from dataclasses import replace
+
+    by_id: dict[str, IntentNode] = {n.intent_id: n for n in primary.nodes}
+    next_id = max(primary._next_id, fallback._next_id)
+    id_remap: dict[str, str] = {}
+
+    for n in fallback.nodes:
+        existing = by_id.get(n.intent_id)
+        if existing is None:
+            by_id[n.intent_id] = n
+            continue
+        if existing.description == n.description and existing.timestamp == n.timestamp:
+            continue  # same id, same content - a genuine duplicate, safe to dedupe
+        new_id = f"n{next_id}"
+        next_id += 1
+        id_remap[n.intent_id] = new_id
+        by_id[new_id] = replace(n, intent_id=new_id)
+
+    def _remapped(node_id: Optional[str]) -> Optional[str]:
+        return id_remap.get(node_id, node_id) if node_id is not None else None
+
+    # Re-thread every fallback-only node's own internal references (not
+    # just the renamed one's) through the rename, so a fallback node
+    # created AFTER a colliding one - pointing at it as its parent or
+    # lineage root - doesn't end up referencing an id that now belongs
+    # to `primary`'s unrelated node instead.
+    if id_remap:
+        for node_id in list(by_id):
+            if node_id in id_remap.values() or node_id in [n.intent_id for n in fallback.nodes]:
+                n = by_id[node_id]
+                by_id[node_id] = replace(
+                    n,
+                    parent_intent=_remapped(n.parent_intent),
+                    lineage_root=_remapped(n.lineage_root) or n.lineage_root,
+                )
 
     merged = IntentGraph()
     merged.nodes = sorted(by_id.values(), key=lambda n: n.timestamp)
 
     seen_edges: set[tuple[str, str, str]] = set()
     merged.edges = []
-    for e in [*fallback.edges, *primary.edges]:
+    for e in primary.edges:
         key = (e.source, e.target, e.edge_type)
         if key not in seen_edges:
             seen_edges.add(key)
             merged.edges.append(e)
+    for e in fallback.edges:
+        remapped = Edge(_remapped(e.source), _remapped(e.target), e.edge_type)
+        key = (remapped.source, remapped.target, remapped.edge_type)
+        if key not in seen_edges:
+            seen_edges.add(key)
+            merged.edges.append(remapped)
 
-    merged._next_id = max(primary._next_id, fallback._next_id)
+    merged._next_id = next_id
     return merged
 
 
@@ -227,12 +282,20 @@ class FirestoreIntentStore:
         # -> save sequence that spans a whole request in service/main.py:
         # load_session() returns a graph, gate/quorum_gate.py mutates it
         # in place (add_turn()), then save_session() overwrites whatever
-        # was there. Two requests racing on the SAME session_id (only
-        # reachable when Firestore is down, since real Firestore
-        # document writes don't have this problem) can lose one's
-        # update. A lock on save_session() alone can't fix that - the
+        # was there. Two requests racing on the SAME session_id can lose
+        # one's update - and, confirmed by independent re-audit, this is
+        # NOT limited to the local-fallback path: save_session()'s real
+        # Firestore write is a plain `.set()`, a blind overwrite, not a
+        # compare-and-swap, so the same lost-update race exists against
+        # live Firestore too, whenever two DIFFERENT Cloud Run instances
+        # (not just two threads in this one process) race on the same
+        # session_id. A lock on save_session() alone can't fix that - the
         # stale read already happened by then. session_lock() below is
-        # what a caller holds across the whole load-to-save sequence;
+        # what a caller holds across the whole load-to-save sequence, but
+        # (see its own docstring) only closes this race within one
+        # process/instance - the cross-instance case is still open;
+        # merge_intent_graphs() at least keeps that case from silently
+        # discarding a real, divergent turn on its next reconciling load.
         # _locks_guard only protects creating a new per-session lock,
         # not the sessions themselves.
         self._locks: dict[str, threading.Lock] = {}
@@ -313,10 +376,25 @@ class FirestoreIntentStore:
         (mutate the graph) -> save_session() sequence, not just around
         save_session() itself - that's the only way to actually close
         the lost-update race described above, not just narrow it.
-        Real Firestore document writes don't need this (Firestore
-        handles that); this only matters for the local-fallback path,
-        but costs nothing to hold either way - see service/main.py's
-        two gate endpoints for the actual call site."""
+
+        This is a `threading.Lock()` - process-local by construction.
+        It fully closes the race between two REQUESTS handled by
+        different THREADS in the same process (Cloud Run's default
+        concurrency serves multiple requests per instance this way),
+        which covers the common case and is why holding it costs
+        nothing either way. It does NOT, and cannot, coordinate across
+        two different Cloud Run INSTANCES (separate processes, no
+        shared memory) - confirmed as a real gap by independent
+        re-audit, not a hypothetical: under sustained load Cloud Run
+        autoscaling can and does route two requests for the same
+        session_id to two different instances, each with its own,
+        mutually invisible lock. A plain Firestore `.set()` in
+        save_session() below is a blind overwrite, not a compare-and-
+        swap, so that cross-instance race is still open - the real fix
+        is a Firestore transaction wrapping the whole load-mutate-save
+        cycle (not yet implemented), not this lock. merge_intent_graphs()
+        above at least stops that race's worst silent-data-loss case
+        (two colliding-id nodes merging into one) from being silent."""
         with self._locks_guard:
             lock = self._locks.setdefault(session_id, threading.Lock())
         with lock:

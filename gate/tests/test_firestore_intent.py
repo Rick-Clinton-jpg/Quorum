@@ -269,8 +269,9 @@ def test_merge_unions_nodes_added_locally_during_an_outage():
     continuous process's graph grows across a Firestore outage.
     `stale_firestore_copy` is what Firestore last saw (a real snapshot
     of the SAME graph, taken before the outage) - not an unrelated
-    graph, since a genuine cross-instance id collision is explicitly
-    out of scope (see FirestoreIntentStore's own docstring)."""
+    graph. A genuine cross-instance id collision (two different turns
+    minted under the same id) is a separate case - see
+    test_merge_keeps_both_nodes_on_a_genuine_id_collision below."""
     grown_locally = IntentGraph()
     grown_locally.add_turn("turn 0, saved before the outage", timestamp=0)
     stale_firestore_copy = deserialize_intent_graph(serialize_intent_graph(grown_locally))
@@ -299,6 +300,50 @@ def test_merge_next_id_avoids_colliding_with_ids_minted_during_the_outage():
     existing_ids = {n.intent_id for n in merged.nodes}
     new_node = merged.add_turn("a turn added after the merge", timestamp=99)
     assert new_node.intent_id not in existing_ids
+
+
+def test_merge_keeps_both_nodes_on_a_genuine_id_collision():
+    """Confirmed as a real gap by independent re-audit: session_lock()
+    only closes the load-mutate-save race within one process (see its
+    own docstring) - two different Cloud Run instances racing on the
+    same session_id can each mint a node under the SAME id for two
+    ACTUALLY DIFFERENT turns. The previous merge silently let `primary`
+    win on any id collision, discarding a real, distinct turn with no
+    trace. Both must survive the merge now, even though they share an
+    id going in."""
+    shared_history = IntentGraph()
+    shared_history.add_turn("shared turn 0, seen by both instances", timestamp=0)
+
+    instance_a = deserialize_intent_graph(serialize_intent_graph(shared_history))
+    instance_a.add_turn("instance A's own turn 1", timestamp=1)
+
+    instance_b = deserialize_intent_graph(serialize_intent_graph(shared_history))
+    instance_b.add_turn("instance B's own, DIFFERENT turn 1", timestamp=1)
+
+    # Both instances minted their new node as "n1" - a real id collision,
+    # not a duplicate: the content genuinely differs.
+    assert instance_a.nodes[-1].intent_id == instance_b.nodes[-1].intent_id == "n1"
+    assert instance_a.nodes[-1].description != instance_b.nodes[-1].description
+
+    merged = merge_intent_graphs(instance_a, instance_b)
+
+    descriptions = {n.description for n in merged.nodes}
+    assert "instance A's own turn 1" in descriptions
+    assert "instance B's own, DIFFERENT turn 1" in descriptions
+    # No two surviving nodes share an id post-merge.
+    assert len({n.intent_id for n in merged.nodes}) == len(merged.nodes)
+
+
+def test_merge_deduplicates_a_genuinely_identical_id_collision():
+    """The common case - the id collision the OLD code assumed was
+    always true - must still just dedupe cheaply, not spuriously fork
+    into two copies of the same turn."""
+    graph = IntentGraph()
+    graph.add_turn("turn 0", timestamp=0)
+    same_snapshot_twice = deserialize_intent_graph(serialize_intent_graph(graph))
+
+    merged = merge_intent_graphs(graph, same_snapshot_twice)
+    assert len(merged.nodes) == 1
 
 
 def test_load_session_merges_firestore_and_local_fallback_honestly_and_reconciles():
