@@ -1,0 +1,26 @@
+name: Test
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python3 -m pip install --upgrade pip
+          pip install -r worker_agent/requirements.txt
+          pip install -r gate/requirements-quorum.txt
+          pip install -r service/requirements.txt
+
+      - name: Run test suite
+        run: |
+          python3 -m pytest gate/tests/ verifiers/sentry/tests/ service/tests/ worker_agent/tests/ -v
