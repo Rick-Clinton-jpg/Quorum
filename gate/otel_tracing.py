@@ -57,12 +57,20 @@ def _init_tracer() -> Optional[Any]:
     provider = TracerProvider(resource=resource)
 
     # K_SERVICE is set by Cloud Run on every real container, never set
-    # locally - confirmed live: CloudTraceSpanExporter's own constructor
-    # doesn't eagerly validate credentials, so without this check a local
-    # run (pytest, `uvicorn --reload`) would only discover it has no real
-    # GCP credentials later, in a background export thread, producing a
-    # noisy but harmless traceback instead of the clean console fallback
-    # this is supposed to be.
+    # locally. An earlier version of this comment claimed
+    # CloudTraceSpanExporter()'s constructor doesn't validate credentials
+    # eagerly - confirmed WRONG by direct local testing (no
+    # GOOGLE_APPLICATION_CREDENTIALS set): it raises
+    # google.auth.exceptions.DefaultCredentialsError synchronously, at
+    # construction, not later in a background export thread. The
+    # `except Exception` below already catches that either way, so this
+    # check isn't load-bearing for correctness - it's here to skip an
+    # unnecessary GCP-auth import and a guaranteed-to-fail construction
+    # attempt on every non-Cloud-Run process start (every local dev run,
+    # every pytest invocation), not to avoid a failure mode that turned
+    # out not to exist. test_otel_tracing.py's
+    # test_cloud_trace_exporter_failure_falls_back_to_console covers the
+    # `except` path directly with this exact real exception type.
     on_cloud_run = bool(os.environ.get("K_SERVICE"))
 
     if on_cloud_run:
@@ -82,6 +90,31 @@ def _init_tracer() -> Optional[Any]:
     trace.set_tracer_provider(provider)
     _tracer = trace.get_tracer("quorum.gate")
     return _tracer
+
+
+def current_trace_id() -> Optional[str]:
+    """32-hex-char OTel trace ID of the currently active span, formatted
+    the same way Cloud Trace's own console search box expects - lets a
+    Warden audit record (gate/quorum_gate.py's audit.log() calls) carry
+    a pointer to the exact Cloud Trace trace it was produced under,
+    without merging the two systems (still one Firestore record and one
+    OTel span per stage, just cross-referenced).
+
+    None whenever there's nothing real to reference: tracing not
+    initialized at all, or no span currently active. Deliberately does
+    NOT return the zero trace ID OTel's own INVALID_SPAN carries when
+    there's no active span - a caller checking `if trace_id:` must never
+    be handed a value that LOOKS like a real trace ID but isn't."""
+    tracer = _init_tracer()
+    if tracer is None:
+        return None
+
+    from opentelemetry import trace
+
+    ctx = trace.get_current_span().get_span_context()
+    if not ctx.is_valid:
+        return None
+    return format(ctx.trace_id, "032x")
 
 
 class _NullSpan:

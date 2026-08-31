@@ -46,6 +46,7 @@ rejected.
 from __future__ import annotations
 
 import re
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
@@ -53,7 +54,7 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 
 from . import quorum_paths  # noqa: F401 - import first, for its sys.path side effects
-from .otel_tracing import stage_span
+from .otel_tracing import current_trace_id, stage_span
 from .redaction import scrub_pii
 
 import pipeline  # gate/pipeline.py - flat import, see quorum_paths.py
@@ -339,6 +340,22 @@ def build_claim_graph(proposal: dict) -> tuple[dict, list[dict]]:
 # ---------------------------------------------------------------------------
 
 
+def _with_trace_id(extra: dict[str, Any]) -> dict[str, Any]:
+    """Adds the active OTel span's trace_id to an audit.log() extra dict,
+    when one is actually active - lets a Firestore audit record be
+    cross-referenced with its Cloud Trace trace without merging the two
+    systems (still one record and one span per stage; see
+    otel_tracing.current_trace_id()'s own docstring). Omitted entirely,
+    not set to None, when there's no real trace to point to - a caller
+    reading an old record or one produced before tracing was configured
+    must not mistake a null trace_id for "tracing ran and found
+    nothing"."""
+    trace_id = current_trace_id()
+    if trace_id is not None:
+        extra = {**extra, "trace_id": trace_id}
+    return extra
+
+
 def _self_check_failed(proposal: dict[str, Any]) -> bool:
     """True only when proposal["self_check_result"]["passed"] is
     explicitly False - a proposal missing the field entirely (older
@@ -418,7 +435,7 @@ def run_gate(
             status=f"sentry:{sentry_result.action.value}",
             tag=sentry_result.action.value,
             note=f"{len(sentry_result.findings)} finding(s) in the proposal's own diff/rationale",
-            extra={"stage": "sentry", "findings": [f.rule for f in sentry_result.findings]},
+            extra=_with_trace_id({"stage": "sentry", "findings": [f.rule for f in sentry_result.findings]}),
         )
 
     # --- Stage B: IntentGraph - always record the turn, win or lose -------
@@ -438,7 +455,7 @@ def run_gate(
                 status=f"intentgraph:{intent_risk}",
                 tag=intent_risk,
                 note=risk_explanation,
-                extra={"stage": "intentgraph", "components": risk_result.components},
+                extra=_with_trace_id({"stage": "intentgraph", "components": risk_result.components}),
             )
         intent_span.set_attribute("quorum.risk", intent_risk)
 
@@ -469,7 +486,7 @@ def run_gate(
             status=f"kernel:{kernel_verdict_value}",
             tag=str(kernel_verdict_value),
             note=str(kernel_verdict.get("detail", "")),
-            extra={"stage": "kernel", "agent_self_report": agent_self_report},
+            extra=_with_trace_id({"stage": "kernel", "agent_self_report": agent_self_report}),
         )
 
     # Recorded either way (audit.log() above already ran), but a HIGH
@@ -525,6 +542,21 @@ def run_gate(
     )
 
 
+# Each attempt can itself burn up to worker_agent.orchestrator's own
+# worst case - CALL_TIMEOUT_SECONDS (180s) + self_check's pytest timeout
+# (120s), TIMES its own internal MAX_ATTEMPTS (2) - about 600s, before
+# this function's loop even gets to decide whether to redraft again.
+# service/main.py bounds max_gate_attempts to [1, 5] (RetryGateRequest),
+# so an unbounded outer loop could legitimately run for up to ~50
+# minutes on one HTTP request with nothing here ever having chosen that
+# number. This deadline doesn't preempt an attempt already in flight
+# (the inner timeouts above already own that) - it only stops a NEW
+# attempt from starting once the total is already spent, the same
+# "bound the call, don't just catch its errors" principle as
+# CALL_TIMEOUT_SECONDS itself.
+RETRY_GATE_OUTER_DEADLINE_SECONDS = 600
+
+
 def retry_gate(
     task_description: str,
     max_gate_attempts: int = 2,
@@ -538,6 +570,13 @@ def retry_gate(
     loop from worker_agent's own internal self-check revision loop
     (worker_agent.orchestrator.MAX_ATTEMPTS). Stops immediately on PASS or
     ESCALATE - ESCALATE needs a human, not another automated attempt.
+
+    Also stops - without starting a new attempt - once
+    RETRY_GATE_OUTER_DEADLINE_SECONDS have elapsed since this call began;
+    the most recent attempt's own real verdict is still returned as-is
+    (a genuine REJECT stays a REJECT), with a reason appended noting the
+    early stop, so a caller can tell "ran out of allowed attempts" apart
+    from "ran out of time for more of them."
 
     `intent_graph`/`audit` are optional so a caller that's tracking a real
     session across multiple calls (e.g. a service layer holding one
@@ -575,16 +614,26 @@ def retry_gate(
     # real model call already happened. Reuses the identical Sentry
     # pipeline run_gate() uses (same ruleset - PII, injection patterns,
     # all of it), so nothing new to maintain here.
-    preflight_result: PipelineResult = pipeline.run_input_stage(task_description)
+    with stage_span("gate.preflight", **{"quorum.task": scrub_pii(task_description[:200])}) as preflight_span:
+        preflight_result: PipelineResult = pipeline.run_input_stage(task_description)
+        preflight_span.set_attribute("quorum.verdict", preflight_result.action.value)
+        preflight_span.set_attribute("quorum.finding_count", len(preflight_result.findings))
+
+        # Logged (and its trace_id captured) while the span above is
+        # still the active one - current_trace_id() only has something
+        # real to report from inside the `with` block, not after it's
+        # already closed.
+        if preflight_result.action == PipelineAction.REJECT:
+            audit.log(
+                agent_id=agent_id,
+                objective=task_description,
+                status="preflight:REJECT",
+                tag="REJECT",
+                note=f"{len(preflight_result.findings)} finding(s) in the raw task description, before any model call",
+                extra=_with_trace_id({"stage": "preflight", "findings": [f.rule for f in preflight_result.findings]}),
+            )
+
     if preflight_result.action == PipelineAction.REJECT:
-        audit.log(
-            agent_id=agent_id,
-            objective=task_description,
-            status="preflight:REJECT",
-            tag="REJECT",
-            note=f"{len(preflight_result.findings)} finding(s) in the raw task description, before any model call",
-            extra={"stage": "preflight", "findings": [f.rule for f in preflight_result.findings]},
-        )
         intent_graph.add_turn("[SAFETY BOUNDARY TRIGGERED]", timestamp=now())
         return (
             {},
@@ -600,8 +649,29 @@ def retry_gate(
     history: list[dict] = []
     proposal: dict = {}
     gate_result: Optional[GateResult] = None
+    deadline = time.monotonic() + RETRY_GATE_OUTER_DEADLINE_SECONDS
 
     for attempt in range(1, max_gate_attempts + 1):
+        # Guards starting a NEW attempt only - attempt 1 always runs
+        # regardless (gate_result is still None then, so there'd be
+        # nothing real to return anyway), matching CALL_TIMEOUT_SECONDS'
+        # own "bound the call, don't refuse to make it" shape.
+        if attempt > 1 and time.monotonic() >= deadline:
+            assert gate_result is not None
+            gate_result.reasons.append(
+                f"Outer retry deadline ({RETRY_GATE_OUTER_DEADLINE_SECONDS}s) reached after {attempt - 1} "
+                "attempt(s) - stopping without further redrafts"
+            )
+            audit.log(
+                agent_id=agent_id,
+                objective=task_description,
+                status="outer_deadline:STOP",
+                tag=gate_result.verdict.value,
+                note=f"stopped after {attempt - 1} attempt(s), before attempt {attempt}",
+                extra={"stage": "outer_deadline", "attempts_made": attempt - 1},
+            )
+            break
+
         proposal = run_worker_agent(description).model_dump()
         gate_result = run_gate(
             proposal,

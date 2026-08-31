@@ -334,3 +334,23 @@ class TestRunGate:
         run_gate(markdown_exfil_proposal, intent_graph=IntentGraph(), audit=audit)
         records = audit.read(limit=50)
         assert records and all(r["agent_id"] == "quorum-worker-agent" for r in records)
+
+    def test_audit_records_carry_a_trace_id_correlating_them_to_their_otel_span(self, markdown_exfil_proposal, tmp_path):
+        """otel_tracing.py exports the same per-stage information as OTel
+        spans (viewable in Cloud Trace) that audit.log() already records
+        to Firestore/disk - but the two were never cross-referenced, so
+        there was no way to go from a specific audit record to the exact
+        Cloud Trace trace it happened under. Each stage's audit record
+        must carry the real, active span's own trace_id, not a
+        placeholder or the all-zero ID OTel uses for "no active span"."""
+        audit = AuditLogger(root=str(tmp_path))
+        run_gate(markdown_exfil_proposal, intent_graph=IntentGraph(), audit=audit)
+
+        records = audit.read(limit=50)
+        assert records, "expected at least one audit record"
+        stage_records = [r for r in records if r.get("stage") in {"sentry", "intentgraph", "kernel"}]
+        assert stage_records, "expected at least one per-stage record"
+        for record in stage_records:
+            trace_id = record.get("trace_id")
+            assert trace_id, f"stage {record.get('stage')!r} record missing trace_id"
+            assert len(trace_id) == 32 and trace_id != "0" * 32
