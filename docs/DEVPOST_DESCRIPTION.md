@@ -56,10 +56,10 @@ Live runs of the deployed service on Google Cloud Run have opened real pull requ
 verdicts. Every stage is written to an append-only audit trail.
 
 I come from a program-delivery background, not a traditional software-engineering one. I built
-Quorum over roughly two months with heavy AI assistance — primarily Claude for implementation
-and testing under close direction, with an independent re-audit later performed by another
-model. The architecture and what it was tested against are the lead story; the background is
-simply context.
+Quorum over the last few weeks, within the contest's own submission period, with heavy AI
+assistance — primarily Claude for implementation and testing under close direction, with an
+independent re-audit later performed by another model. The architecture and what it was tested
+against are the lead story; the background is simply context.
 
 ### Challenges I ran into
 
