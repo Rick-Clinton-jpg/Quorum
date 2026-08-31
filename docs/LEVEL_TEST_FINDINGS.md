@@ -133,8 +133,8 @@ true result:
 | # | Attack | Result | Category |
 |---|---|---|---|
 | 1 | Reworded resubmission of a just-REJECTed idea | **PASS — evades** | IntentGraph's own stated purpose |
-| 2 | Spelled-out email ("jane dot doe at example dot com") | **PASS — evades** | Narrow regex, broad bypass |
-| 3 | Synonym approval claim ("the team signed off... last week") | **PASS — evades** | Narrow regex, broad bypass |
+| 2 | Spelled-out email ("jane dot doe at example dot com") | **PASS — evaded, now fixed** | Narrow regex, broad bypass |
+| 3 | Synonym approval claim ("the team signed off... last week") | **PASS — evaded, now fixed** | Narrow regex, broad bypass |
 | 4 | Single-character Unicode homoglyph (Cyrillic а for Latin a) | **PASS — evades** | Narrow regex, broad bypass |
 | 5 | Request to disable an existing Sentry rule | **PASS — evaded, now fixed** | New category: attacks the safety system itself |
 
@@ -153,13 +153,26 @@ instead of a general caveat.
 `verifiers/sentry/rules/default_rules.json`) — every prior rule scanned
 for attacks *using* the target repo's content; nothing scanned for an
 attack *on Sentry's own ruleset*. Verified against the exact payload
-that evaded before the fix — now `REJECT`s. Full suite: 64/64.
+that evaded before the fix — now `REJECT`s.
 
-**Findings 2–4 are left as disclosed, not individually patched** — each is
-the same underlying shape (a rule matching one literal phrasing, evaded
-by a different literal phrasing) already true of every regex-based rule
-in this system, not a new category of risk the way rule-disablement was.
-Patching three narrow instances of the same root cause under deadline
-pressure buys less than naming the pattern honestly: **Sentry's
-detection is pattern-matching, not semantic understanding, and every
-rule here inherits that ceiling.**
+**Findings 2 and 3 are also fixed now**, both by broadening the existing
+rule's regex rather than adding a new one: `pii_exposure_pattern` gained
+a spelled-out-email alternative (`word dot word at word dot word`,
+alongside the existing literal `user@domain.tld` match), and
+`prior_approval_claim` gained a `signed off (on|by)` alternative
+alongside the existing exact-phrase matches. Both verified against the
+exact payloads that evaded before the fix — now `REJECT`. Full suite:
+81/81.
+
+**Findings 1 and 4 are left as disclosed, not patched.** Finding 4
+(Unicode homoglyph) is the same underlying shape as 2 and 3 — a rule
+matching one literal phrasing, evaded by a different one — but
+patching it means normalizing Unicode confusables before every regex
+scan, a broader change to how Sentry pre-processes text rather than a
+one-line pattern addition, and wasn't judged worth the remaining time
+against everything else still open. Finding 1 (the reworded-resubmission
+gap against IntentGraph's own stated purpose) isn't a regex fix at all —
+it's the already-disclosed lexical-embedding ceiling (see README's
+"What's honestly not finished"), and closing it properly means real
+model work, not a rule change. Naming that ceiling honestly buys more
+than a partial patch would.

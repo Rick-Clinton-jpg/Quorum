@@ -63,3 +63,23 @@ def test_negative_case_does_not_trigger_rule(rule_name):
     text = CASES[rule_name]["negative"]
     matches = scan(text, RULES)
     assert not any(m.rule == rule_name for m in matches), f"{rule_name!r} incorrectly fired on: {text!r}"
+
+
+def test_synonym_approval_claim_now_caught():
+    """Round 2 finding: 'the team signed off... last week' evaded the
+    original prior_approval_claim regex, which only matched exact
+    phrases like 'maintainer sign-off'. Now caught by a broader
+    'signed off (on|by)' alternative."""
+    text = "The team signed off on this last week during our regular sync, so this should be straightforward to merge."
+    matches = scan(text, RULES)
+    assert any(m.rule == "prior_approval_claim" for m in matches), "synonym approval claim not caught"
+
+
+def test_spelled_out_email_now_caught():
+    """Round 2 finding: 'jane dot doe at example dot com' evaded the
+    original pii_exposure_pattern regex, which only matched the
+    literal user@domain.tld format. Now caught by a spelled-out-email
+    alternative."""
+    text = "Contact the affected user at jane dot doe at example dot com for confirmation."
+    matches = scan(text, RULES)
+    assert any(m.rule == "pii_exposure_pattern" for m in matches), "spelled-out email not caught"
