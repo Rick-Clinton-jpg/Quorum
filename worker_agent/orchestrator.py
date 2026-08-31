@@ -18,6 +18,11 @@ from .self_check import run_self_check
 
 APP_NAME = "quorum-worker-agent"
 MAX_ATTEMPTS = 2  # one draft + one agent-driven revision, per the Phase 2 brief
+# Bounds one drafting turn (tool calls to read Sentry's source included,
+# not just the model's own response). Catching the call's *exceptions*
+# (below) doesn't help against a hang - Gemini/ADK never raising at all
+# is a distinct failure mode from Gemini/ADK raising something.
+CALL_TIMEOUT_SECONDS = 180
 
 
 class WorkerAgentCallError(RuntimeError):
@@ -49,7 +54,19 @@ async def _run_worker_agent_async(task_description: str) -> Proposal:
 
     for attempt in range(1, MAX_ATTEMPTS + 1):
         try:
-            await runner.run_debug(message, user_id=user_id, session_id=session_id, quiet=True)
+            await asyncio.wait_for(
+                runner.run_debug(message, user_id=user_id, session_id=session_id, quiet=True),
+                timeout=CALL_TIMEOUT_SECONDS,
+            )
+        except asyncio.TimeoutError as exc:
+            # Distinct from the except Exception below: this is Gemini/ADK
+            # never returning at all, not returning an error. Confirmed
+            # missing by an external parallel review - the try/except
+            # added earlier this session only covered the call raising,
+            # never the call simply hanging.
+            raise WorkerAgentCallError(
+                f"Worker Agent's call to Gemini (via ADK) exceeded {CALL_TIMEOUT_SECONDS}s on attempt {attempt}"
+            ) from exc
         except Exception as exc:
             raise WorkerAgentCallError(
                 f"Worker Agent's call to Gemini (via ADK) failed on attempt {attempt}: {exc}"

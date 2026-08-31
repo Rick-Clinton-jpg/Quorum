@@ -8,11 +8,13 @@ deployed service, not by a fast local unit test.
 
 from __future__ import annotations
 
+import asyncio
 from unittest.mock import AsyncMock, patch
 
 import pytest
 from google.adk.runners import InMemoryRunner
 
+from worker_agent import orchestrator
 from worker_agent.orchestrator import WorkerAgentCallError, run_worker_agent
 
 
@@ -31,3 +33,22 @@ def test_model_call_failure_raises_worker_agent_call_error_not_a_raw_exception()
 
     assert "simulated Vertex AI outage" in str(exc_info.value)
     assert exc_info.value.__cause__ is not None  # the original exception is chained, not swallowed
+
+
+def test_model_call_that_hangs_times_out_instead_of_blocking_forever():
+    """A distinct failure mode from the one above: Gemini/ADK never
+    returning at all, not returning an error. Confirmed missing by an
+    external parallel review - the earlier fix's try/except only caught
+    the call *raising*, never the call simply hanging. Uses a real
+    asyncio.wait_for against a coroutine that actually sleeps past a
+    shortened timeout (patched to 0.05s so the test stays fast), not a
+    mocked timeout, so a regression in the actual asyncio.wait_for
+    wiring can't hide behind a mock."""
+
+    async def _hangs_forever(*_args, **_kwargs):
+        await asyncio.sleep(10)
+
+    with patch.object(InMemoryRunner, "run_debug", new=_hangs_forever), \
+         patch.object(orchestrator, "CALL_TIMEOUT_SECONDS", 0.05):
+        with pytest.raises(WorkerAgentCallError, match="exceeded"):
+            run_worker_agent("a task whose model call will hang")
