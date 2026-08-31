@@ -253,6 +253,20 @@ def determine_claim_origin(claim: dict) -> tuple[str, str]:
     self-report and is not trusted here (see this module's docstring and
     the Phase 3 addendum). Returns (origin, note); note explains the
     decision, for the audit log.
+
+    VERIFIED is granted ONLY when the statement quotes an exact span
+    that appears verbatim in the source, at a specific reported line -
+    never from keyword/topic overlap alone. Confirmed as a real,
+    root-cause gap by independent re-audit, twice: negation-gating the
+    overlap path (this file's earlier fix) still let a POSITIVELY
+    phrased false claim through - e.g. "The gate rejects supported
+    Kernel claims" (actually false: PASS, not REJECT, is what happens
+    on a SUPPORTED verdict) - marked VERIFIED because all its
+    distinctive words happen to occur somewhere in quorum_gate.py, which
+    discusses REJECT, SUPPORTED, and Kernel claims extensively without
+    that co-occurrence implying the claim's specific assertion is true.
+    "These words are somewhere in this file" was never real confirmation
+    of a specific claim; only an exact quoted span is.
     """
     path = _resolve_claim_source_path(claim["source"])
     if path is None:
@@ -270,9 +284,18 @@ def determine_claim_origin(claim: dict) -> tuple[str, str]:
 
     quoted = _QUOTE_RE.findall(claim["statement"])
     if quoted:
-        if all(q in content for q in quoted):
-            return "VERIFIED", f"every quoted span in the statement appears verbatim in {path.name}"
-        return "REPORTED", f"a quoted span in the statement was not found verbatim in {path.name}"
+        lines = content.splitlines()
+        locations: list[str] = []
+        missing = None
+        for q in quoted:
+            hit_line = next((i + 1 for i, line in enumerate(lines) if q in line), None)
+            if hit_line is None:
+                missing = q
+                break
+            locations.append(f"{path.name}:{hit_line}")
+        if missing is None:
+            return "VERIFIED", f"every quoted span appears verbatim in {', '.join(locations)}"
+        return "REPORTED", f"a quoted span ({missing!r}) was not found verbatim in {path.name}"
 
     words = {w.lower() for w in _WORD_RE.findall(claim["statement"]) if w.lower() not in _STOPWORDS}
     if not words:
@@ -281,7 +304,12 @@ def determine_claim_origin(claim: dict) -> tuple[str, str]:
     hits = sum(1 for w in words if w in hay)
     ratio = hits / len(words)
     if ratio >= _CONTENT_OVERLAP_THRESHOLD:
-        return "VERIFIED", f"{hits}/{len(words)} distinctive statement terms found in {path.name}"
+        return (
+            "REPORTED",
+            f"{hits}/{len(words)} distinctive statement terms found in {path.name}, but that only confirms the "
+            "topic is discussed there, not the claim's specific assertion - VERIFIED requires an exact quoted "
+            "span, not keyword overlap",
+        )
     return "REPORTED", f"only {hits}/{len(words)} distinctive statement terms found in {path.name} - not enough to confirm"
 
 

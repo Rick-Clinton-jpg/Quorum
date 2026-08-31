@@ -53,7 +53,7 @@ class TestDetermineClaimOrigin:
     def test_source_pointing_at_a_real_vendored_file_with_matching_content_is_verified(self):
         claim = {
             "id": "C0",
-            "statement": "Sentry's env_exfil_pattern rule matches os.environ access.",
+            "statement": "The Sentry ruleset includes a rule literally named `env_exfil_pattern`.",
             "source": "verifiers/sentry/rules/default_rules.json",
             "confidence": 0.9,
         }
@@ -83,6 +83,28 @@ class TestDetermineClaimOrigin:
             "origin": "RETRIEVED",
             "source": "rules/default_rules.json file content",
             "confidence": 1.0,
+        }
+        origin, note = determine_claim_origin(claim)
+        assert origin == "REPORTED", note
+
+    def test_positively_phrased_false_claim_via_keyword_overlap_alone_is_not_verified(self):
+        """Confirmed as a real, root-cause gap by independent re-audit,
+        surviving the earlier negation-gating fix: a claim with NO
+        negation word can still be false while every one of its
+        distinctive words happens to occur somewhere in a large source
+        file discussing that general topic. "The gate rejects supported
+        Kernel claims" is actually false (PASS, not REJECT, is what
+        happens on a SUPPORTED Kernel verdict - see run_gate() above),
+        but quorum_gate.py discusses REJECT, SUPPORTED, Kernel, and
+        claims extensively, so word-overlap alone used to mark this
+        VERIFIED. VERIFIED now requires an exact quoted span, never
+        keyword/topic overlap - this claim has no quotes, so REPORTED
+        is the only possible outcome regardless of its truth."""
+        claim = {
+            "id": "C0",
+            "statement": "The gate rejects supported Kernel claims",
+            "source": "gate/quorum_gate.py",
+            "confidence": 0.9,
         }
         origin, note = determine_claim_origin(claim)
         assert origin == "REPORTED", note

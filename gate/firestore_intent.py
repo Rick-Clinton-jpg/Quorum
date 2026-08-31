@@ -140,11 +140,28 @@ def merge_intent_graphs(primary: IntentGraph, fallback: IntentGraph) -> IntentGr
     under a freshly minted id, rather than dropped - and every OTHER
     fallback node's own parent_intent/lineage_root/edges are remapped
     through the same rename so the fallback's internal lineage chain
-    stays consistent after the rename. (This doesn't make the
-    underlying race impossible - the real fix is process-external
-    coordination, e.g. a Firestore transaction around the whole
-    load-mutate-save cycle, still open work - it only makes this merge
-    step stop being the place a real turn quietly vanishes.)"""
+    stays consistent after the rename.
+
+    Confirmed as a further real gap by independent re-audit: even the
+    "genuine duplicate, safe to dedupe" case above was checked against
+    description+timestamp alone, NOT safety_boundary - so two copies of
+    the SAME turn (same id, same description, same timestamp), where
+    one side has safety_boundary=True (e.g. that process's own REJECT
+    marked it after the fork point) and the other still has False, were
+    treated as identical and the primary copy's False silently won,
+    losing the boundary flag entirely - the single most security-
+    critical field on a node (see this module's own docstring: re-entry
+    detection's hard gate depends on a real safety_boundary=True node
+    existing). Fixed by OR-ing safety_boundary specifically, on both the
+    dedupe path and (implicitly, since each side keeps its own node) the
+    rename path - never AND, never "whichever side happened to be
+    primary": a boundary either side ever recorded must survive.
+
+    (None of this makes the underlying race impossible - the real fix
+    is process-external coordination, e.g. a Firestore transaction
+    around the whole load-mutate-save cycle, still open work - it only
+    makes this merge step stop being the place a real turn, or a real
+    safety flag on an otherwise-identical turn, quietly vanishes.)"""
     from dataclasses import replace
 
     by_id: dict[str, IntentNode] = {n.intent_id: n for n in primary.nodes}
@@ -157,7 +174,11 @@ def merge_intent_graphs(primary: IntentGraph, fallback: IntentGraph) -> IntentGr
             by_id[n.intent_id] = n
             continue
         if existing.description == n.description and existing.timestamp == n.timestamp:
-            continue  # same id, same content - a genuine duplicate, safe to dedupe
+            # Same turn - safe to dedupe, but never let a True
+            # safety_boundary on either copy get silently dropped.
+            if n.safety_boundary and not existing.safety_boundary:
+                by_id[n.intent_id] = replace(existing, safety_boundary=True)
+            continue
         new_id = f"n{next_id}"
         next_id += 1
         id_remap[n.intent_id] = new_id

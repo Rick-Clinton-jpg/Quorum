@@ -334,6 +334,30 @@ def test_merge_keeps_both_nodes_on_a_genuine_id_collision():
     assert len({n.intent_id for n in merged.nodes}) == len(merged.nodes)
 
 
+def test_merge_never_drops_a_safety_boundary_flag_on_an_otherwise_identical_node():
+    """Confirmed as a further real gap by independent re-audit: the
+    "genuine duplicate, safe to dedupe" path only compared
+    description+timestamp, not safety_boundary - so two copies of the
+    exact same turn (same id, same description, same timestamp), where
+    one side's own REJECT marked it safety_boundary=True after the fork
+    point and the other still has False, were treated as identical and
+    primary's False silently won. safety_boundary is THE field re-entry
+    detection's hard gate depends on existing (scorer.py) - losing it
+    silently is worse than losing an ordinary turn."""
+    primary = IntentGraph()
+    primary.add_turn("the same turn on both sides", timestamp=0)
+    assert primary.nodes[0].safety_boundary is False
+
+    fallback = IntentGraph()
+    fallback.add_turn("the same turn on both sides", timestamp=0)
+    fallback.add_turn("[SAFETY BOUNDARY TRIGGERED]", timestamp=0)  # marks fallback's n0 True
+    assert fallback.nodes[0].safety_boundary is True
+
+    merged = merge_intent_graphs(primary, fallback)
+    assert len(merged.nodes) == 1
+    assert merged.nodes[0].safety_boundary is True
+
+
 def test_merge_deduplicates_a_genuinely_identical_id_collision():
     """The common case - the id collision the OLD code assumed was
     always true - must still just dedupe cheaply, not spuriously fork
