@@ -197,6 +197,35 @@ def _resolve_claim_source_path(source: str) -> Optional[Path]:
     return None
 
 
+# A small, deliberately conservative negation word list - not full NLP
+# negation-scope detection. Known false-positive traps: "not uncommon",
+# "not only", double negation. That's the safe direction to be wrong in:
+# this function never returns "REFUTED" (that verdict, when it happens,
+# comes from the separately vendored Reasoning Kernel, not from here) -
+# a false hit here only downgrades a possibly-genuine VERIFIED to
+# REPORTED, never the reverse. Confirmed as a real gap without this: a
+# claim's overlapping words with its source could reach the ratio
+# threshold below even when the statement asserts the opposite of what
+# the source actually says (the source negates the shared terms, the
+# statement doesn't, or vice versa) - "unsupported claims marked
+# VERIFIED via lexical overlap alone."
+_NEGATION_WORDS = {"not", "never", "cannot", "can't", "won't", "isn't", "doesn't", "wasn't", "aren't", "no longer"}
+
+
+def _has_negation(text: str) -> bool:
+    lowered = text.lower()
+    return any(w in lowered for w in _NEGATION_WORDS)
+
+
+def _source_lines_with_any_term(words: set[str], content: str) -> str:
+    """Only the lines of `content` containing at least one of the
+    claim's own distinctive terms - scopes the negation check to where
+    the claim's actual evidence is, not the whole file, which would
+    almost always contain SOME negation word unrelated to this specific
+    claim."""
+    return "\n".join(line for line in content.splitlines() if any(w in line.lower() for w in words))
+
+
 def determine_claim_origin(claim: dict) -> tuple[str, str]:
     """Gate-determined origin for one claim - "VERIFIED" or "REPORTED".
 
@@ -224,6 +253,13 @@ def determine_claim_origin(claim: dict) -> tuple[str, str]:
     hits = sum(1 for w in words if w in hay)
     ratio = hits / len(words)
     if ratio >= _CONTENT_OVERLAP_THRESHOLD:
+        relevant_source = _source_lines_with_any_term(words, content)
+        if _has_negation(claim["statement"]) != _has_negation(relevant_source):
+            return (
+                "REPORTED",
+                f"{hits}/{len(words)} distinctive terms matched {path.name}, but the statement's negation "
+                "doesn't match the source lines containing those terms - not confirmed as written",
+            )
         return "VERIFIED", f"{hits}/{len(words)} distinctive statement terms found in {path.name}"
     return "REPORTED", f"only {hits}/{len(words)} distinctive statement terms found in {path.name} - not enough to confirm"
 
