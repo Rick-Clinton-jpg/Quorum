@@ -30,6 +30,7 @@ after a reload.
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import threading
@@ -48,6 +49,102 @@ try:
     FIRESTORE_AVAILABLE = True
 except ImportError:
     FIRESTORE_AVAILABLE = False
+
+# Firestore's real hard cap is 1 MiB (1,048,576 bytes) per document,
+# server-enforced, every field included. Confirmed live to matter, not
+# hypothetical: production (service/requirements.txt deliberately
+# excludes sentence-transformers - see that file's own comment) always
+# runs IntentExtractor's HashingVectorizer fallback, n_features=2048 -
+# one node's embedding array alone serializes to roughly 40KB of JSON,
+# so a single session's graph can approach Firestore's limit in well
+# under a hundred turns, not thousands. _estimate_bytes()'s json.dumps
+# length is a conservative proxy for Firestore's own wire encoding
+# (mostly float arrays) - this budget leaves real headroom below the
+# hard cap rather than targeting it exactly.
+_FIRESTORE_SAFE_BYTES = 700_000
+
+
+def _estimate_bytes(data: dict[str, Any]) -> int:
+    return len(json.dumps(data).encode("utf-8"))
+
+
+def _prune_for_firestore(data: dict[str, Any], max_bytes: int) -> tuple[dict[str, Any], int]:
+    """Drops the OLDEST non-safety-boundary nodes (oldest first, by
+    append order) until the serialized result fits under max_bytes.
+    NEVER drops a safety_boundary node - re-entry detection's actual
+    security guarantee (scorer.py's lineage_boundary_nodes) depends on
+    every one of those existing forever; see this module's own
+    docstring. Ordinary embedding-similarity matching (_best_match)
+    over older, non-boundary turns is best-effort and degrades
+    gracefully as they age out - that's the trade this function makes.
+
+    Returns (data, nodes_dropped) so save_session can log honestly
+    when a session's history was actually cut down for Firestore,
+    rather than silently truncating it. Never touches `data` itself -
+    the caller's own in-memory graph and local fallback copy keep the
+    full, unpruned history regardless."""
+    if _estimate_bytes(data) <= max_bytes:
+        return data, 0
+
+    nodes = data["nodes"]  # append order == oldest first
+    overage = _estimate_bytes(data) - max_bytes
+    drop_ids: set[str] = set()
+    reclaimed = 0
+    for n in nodes:
+        if reclaimed >= overage:
+            break
+        if n["safety_boundary"]:
+            continue
+        drop_ids.add(n["intent_id"])
+        reclaimed += len(json.dumps(n).encode("utf-8"))
+
+    if not drop_ids:
+        # Nothing safe left to prune (e.g. every node is a safety
+        # boundary) - return unchanged and let the caller's own
+        # Firestore write fail loudly rather than silently dropping one.
+        return data, 0
+
+    pruned = {
+        **data,
+        "nodes": [n for n in nodes if n["intent_id"] not in drop_ids],
+        "edges": [e for e in data["edges"] if e["source"] not in drop_ids and e["target"] not in drop_ids],
+    }
+    return pruned, len(drop_ids)
+
+
+def merge_intent_graphs(primary: IntentGraph, fallback: IntentGraph) -> IntentGraph:
+    """Unions two IntentGraphs for the SAME session into one - used when
+    a single process finds both a Firestore record and a not-yet-
+    reconciled local fallback copy for the same session_id (an earlier
+    save_session() call this process made hit a live Firestore failure
+    and fell back to memory; a later load finds Firestore reachable
+    again). Never silently prefers one source over the other: trusting
+    Firestore blindly the moment it recovers would quietly cost every
+    turn this process recorded locally during the outage.
+
+    Nodes are append-only and never mutated after creation (see
+    graph.py's add_turn()), so a shared intent_id is assumed to be the
+    same node - `primary` wins on an id collision, arbitrarily but
+    harmlessly, since the two are expected to be identical in that
+    case. `_next_id` is set to the max of both inputs, so ids minted
+    after the merge can't collide with either source's ids."""
+    by_id: dict[str, IntentNode] = {}
+    for n in [*fallback.nodes, *primary.nodes]:  # primary added last -> wins on id collision
+        by_id[n.intent_id] = n
+
+    merged = IntentGraph()
+    merged.nodes = sorted(by_id.values(), key=lambda n: n.timestamp)
+
+    seen_edges: set[tuple[str, str, str]] = set()
+    merged.edges = []
+    for e in [*fallback.edges, *primary.edges]:
+        key = (e.source, e.target, e.edge_type)
+        if key not in seen_edges:
+            seen_edges.add(key)
+            merged.edges.append(e)
+
+    merged._next_id = max(primary._next_id, fallback._next_id)
+    return merged
 
 
 def serialize_intent_graph(graph: IntentGraph) -> dict[str, Any]:
@@ -149,29 +246,65 @@ class FirestoreIntentStore:
 
     def load_session(self, session_id: str) -> IntentGraph:
         """A fresh IntentGraph() for a session never seen before - matches
-        IntentGraph's own no-argument constructor, not a special case."""
+        IntentGraph's own no-argument constructor, not a special case.
+
+        If a real Firestore record AND a local fallback copy both exist
+        for this session_id (an earlier save_session() call on this
+        process hit a live Firestore failure and fell back to memory,
+        and Firestore is reachable again now), merges them honestly via
+        merge_intent_graphs() instead of silently preferring whichever
+        source happened to be checked first - see that function's
+        docstring for why a blind preference would cost real turns."""
+        firestore_graph: Optional[IntentGraph] = None
         if self.db is not None:
             try:
                 doc = self.db.collection(self.collection_name).document(session_id).get()
                 if doc.exists:
-                    return deserialize_intent_graph(doc.to_dict())
-                return IntentGraph()
+                    firestore_graph = deserialize_intent_graph(doc.to_dict())
             except Exception as exc:  # noqa: BLE001
                 logger.error("Failed to load session %r from Firestore (%s) - trying local fallback.", session_id, exc)
 
-        if session_id in self._local_sessions:
-            return deserialize_intent_graph(self._local_sessions[session_id])
+        local_data = self._local_sessions.get(session_id)
+        local_graph = deserialize_intent_graph(local_data) if local_data is not None else None
+
+        if firestore_graph is not None and local_graph is not None:
+            merged = merge_intent_graphs(firestore_graph, local_graph)
+            logger.warning(
+                "Session %r had both a Firestore record (%d node(s)) and an unreconciled local "
+                "fallback copy (%d node(s)) - merged honestly into %d node(s) rather than "
+                "silently preferring one.",
+                session_id, len(firestore_graph.nodes), len(local_graph.nodes), len(merged.nodes),
+            )
+            self._local_sessions.pop(session_id, None)  # reconciled - stop treating it as still-pending
+            return merged
+        if firestore_graph is not None:
+            return firestore_graph
+        if local_graph is not None:
+            return local_graph
         return IntentGraph()
 
     def save_session(self, session_id: str, graph: IntentGraph) -> None:
         data = serialize_intent_graph(graph)
         if self.db is not None:
+            write_data, dropped = _prune_for_firestore(data, max_bytes=_FIRESTORE_SAFE_BYTES)
+            if dropped:
+                logger.warning(
+                    "Session %r's graph (%d node(s)) exceeded Firestore's safe size budget "
+                    "(%d bytes) - dropped %d oldest non-safety-boundary node(s) before writing "
+                    "(every safety_boundary node was kept). This process's own in-memory "
+                    "IntentGraph, and the local fallback copy if one is written below, both "
+                    "keep the full, unpruned history.",
+                    session_id, len(graph.nodes), _FIRESTORE_SAFE_BYTES, dropped,
+                )
             try:
-                self.db.collection(self.collection_name).document(session_id).set(data)
+                self.db.collection(self.collection_name).document(session_id).set(write_data)
                 return
             except Exception as exc:  # noqa: BLE001
                 logger.error("Failed to save session %r to Firestore (%s) - using local fallback.", session_id, exc)
 
+        # Local fallback always keeps the FULL, unpruned graph - pruning
+        # is purely a Firestore document-size accommodation, not
+        # something the in-memory fallback needs.
         self._local_sessions[session_id] = data
 
     @contextmanager
