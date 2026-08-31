@@ -143,11 +143,26 @@ from sentry.engine import Match, Rule, load_rules, scan
 | `scan` | `scan(text: str, rules: list[Rule] \| None = None) -> list[Match]` | Loads default rules if `rules` omitted |
 | `load_rules` | `load_rules(path: str \| Path = DEFAULT_RULES_PATH) -> list[Rule]` | Raises `RuleLoadError` on malformed JSON/regex/severity |
 | `Match` | frozen dataclass: `rule: str, severity: str, description: str, start: int, end: int, text: str` | **Not a dict** — `gate/pipeline.py`'s historical bug came from assuming it was |
-| `Rule` | frozen dataclass: `name: str, pattern: str, severity: str, description: str, regex: re.Pattern` | |
+| `Rule` | frozen dataclass: `name: str, pattern: str, severity: str, description: str, regex: regex.Pattern` | see note below — not stdlib `re.Pattern` |
 | `RuleLoadError(ValueError)` | — | |
 
 `severity` values are plain strings `"HIGH"`/`"MEDIUM"`/`"LOW"` (validated
 against `VALID_SEVERITIES` at load time, not an enum at the `Match` level).
+
+**Substantively modified for Quorum, not vendored as-is:** `engine.py`
+was switched from stdlib `re` to the third-party `regex` module, and
+`scan()` now enforces a real `timeout=1.0s` on every rule's
+`finditer()` call. `rules/default_rules.json` is a file the Worker
+Agent proposes diffs to (see `gate/tests/fixtures/escalate_demo_proposal.json`),
+so a rule's pattern is untrusted input, not maintainer-reviewed —
+stdlib `re` has no way to bound a catastrophic-backtracking match's
+wall-clock time, and could hang `scan()` (and therefore the whole
+gate) indefinitely on real input. A rule that exceeds its budget fails
+closed: it's reported as its own HIGH-severity finding ("unsafe to
+evaluate") rather than silently skipped or left to hang, and other
+rules in the same scan still run. See `verifiers/sentry/tests/test_redos_defense.py`
+for a real (not mocked) catastrophic-backtracking pattern proving the
+timeout actually bounds the match.
 
 **CLI** (`verifiers/sentry/src/sentry/cli.py`, entry point `sentry` via
 `pyproject.toml`'s `[project.scripts]`):
@@ -157,8 +172,13 @@ sentry scan [TARGET] [--stdin] [--rules PATH]
 `TARGET` is text or a file path. Exit code `1` if any `HIGH` finding,
 else `0`; `2` on a rules-load error.
 
-**Dependencies:** stdlib only at runtime (`re`, `json`, `pathlib`,
-`dataclasses`, `argparse`). Dev-only: `pytest>=7.0`. `requires-python = ">=3.9"`.
+**Dependencies:** `regex>=2023.0.0` (see above), plus stdlib `json`,
+`pathlib`, `dataclasses`, `argparse`. Dev-only: `pytest>=7.0`.
+`requires-python = ">=3.9"`. `gate/quorum_paths.py` puts
+`verifiers/sentry/src` on `sys.path` directly rather than
+pip-installing this package, so `regex` is also listed explicitly in
+`service/requirements.txt` for the same reason that file already lists
+`pytest` — see that file's own comment.
 
 ---
 

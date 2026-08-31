@@ -54,8 +54,56 @@ Live on Cloud Run: `https://quorum-coordinator-497954606552.us-central1.run.app`
   reproducing the race deterministically with a `threading.Barrier`,
   then confirming the lock actually prevents it
   (`gate/tests/test_firestore_intent.py`).
+- **A session's IntentGraph can outgrow Firestore's 1 MiB document
+  limit**: production always runs the offline hashing-vectorizer
+  embedding backend (see below), so a single session can approach that
+  limit in well under a hundred turns. `_prune_for_firestore()`
+  (`gate/firestore_intent.py`) drops the oldest non-safety-boundary
+  nodes before every write rather than letting the write fail and
+  silently fall back forever; a session that fell back locally during
+  a real outage is merged back honestly, not discarded, the next time
+  Firestore is reachable (`gate/tests/test_firestore_intent.py`).
+- **A Worker Agent-drafted regex rule could hang the scanner**:
+  `rules/default_rules.json` is a file the Worker Agent proposes diffs
+  to, so a rule's pattern is untrusted input — a catastrophic-
+  backtracking pattern could otherwise hang Sentry's `scan()` (and the
+  whole gate with it) indefinitely. `verifiers/sentry/src/sentry/engine.py`
+  now enforces a real per-rule matching timeout, tested against an
+  actual runaway pattern, not a mocked one
+  (`verifiers/sentry/tests/test_redos_defense.py`).
+- **`retry_gate()`'s redraft loop had no bound on total wall time**:
+  worst case, each attempt could cost minutes and the loop allowed
+  several — unbounded, one HTTP request could legitimately run for
+  tens of minutes. `RETRY_GATE_OUTER_DEADLINE_SECONDS`
+  (`gate/quorum_gate.py`) now stops a new attempt from starting once
+  spent, preserving the last attempt's real verdict
+  (`gate/tests/test_retry_gate.py`).
 
 Built for the All Things Agentic Hackathon, The Taskmaster track.
+
+## Benchmarks
+
+Measured locally (`gate/tests/fixtures/markdown_exfil_proposal.json`,
+20 runs after a warm-up call, median reported) — the deterministic
+verifier path only, no live Gemini/Firestore calls:
+
+| Stage | Median latency |
+|---|---|
+| Full `run_gate()` (Sentry + IntentGraph + Kernel, all three stages) | ~4ms |
+| Sentry `scan()` alone (all six default rules) | ~0.24ms |
+
+Sentry's real per-rule matching budget (`RULE_TIMEOUT_SECONDS = 1.0s`,
+see "Failure handling" above) is ~4,000x this measured cost on
+ordinary input — the ReDoS defense only ever engages against an
+actually pathological pattern, not normal traffic. The Gemini/Vertex AI
+call that precedes the gate (drafting the proposal) dominates
+end-to-end latency by a wide margin and isn't included above; that
+call is bounded separately (`CALL_TIMEOUT_SECONDS = 180s`,
+`worker_agent/orchestrator.py`).
+
+Full local test suite (`gate/`, `verifiers/sentry/`, `service/`,
+`worker_agent/` — 143 tests, no network calls): ~10s wall time on the
+same machine.
 
 ## Repository layout
 
@@ -76,7 +124,7 @@ pip install -r requirements.txt
 pip install -r ../gate/requirements-quorum.txt
 pip install -r ../service/requirements.txt   # for gate/github_action.py, pytest, etc.
 
-# Full gate test suite (34 tests, no network calls)
+# Full gate test suite (90 tests, no network calls)
 python3 -m pytest ../gate/tests/ -v
 
 # Worker Agent alone (needs GOOGLE_API_KEY or Vertex AI credentials - see worker_agent/README.md)
@@ -146,8 +194,13 @@ predates the hackathon. Two were substantively modified for Quorum, not
 just vendored as-is: Sentry's ruleset gained three new detection rules
 (`prior_approval_claim`, `pii_exposure_pattern`, `rule_disablement_request`)
 written specifically for gaps this project's own adversarial testing
-found, and IntentGraph's `extractor.py` had its embedding-backend logic
-rewritten after `sentence-transformers` failed to load in the deployed
-environment. `gate/`, Warden, and Review-Board are used unmodified — all
+found, and its engine (`engine.py`) was switched from stdlib `re` to
+the third-party `regex` module with a real per-rule matching timeout —
+`rules/default_rules.json` is a file the Worker Agent proposes diffs
+to, so a rule's pattern is untrusted input, and stdlib `re` has no way
+to bound a catastrophic-backtracking match's wall-clock time. IntentGraph's
+`extractor.py` had its embedding-backend logic rewritten after
+`sentence-transformers` failed to load in the deployed environment.
+`gate/`, Warden, and Review-Board are used unmodified — all
 coordination happens from `gate/quorum_gate.py` calling into them. See
 `docs/INTEGRATION_MAP.md` for what each one actually does and doesn't do.
